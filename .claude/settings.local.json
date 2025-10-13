@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/renata-amutio/Projects/renatillas/g18n-dev/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
