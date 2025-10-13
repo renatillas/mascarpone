@@ -20,9 +20,8 @@ gleam run -m mascarpone
 
 The TUI will guide you through:
 
-1. **Project Name**: Enter a name for your game project
-2. **Lustre Integration**: Choose whether to include Lustre for UI overlays (menus, HUDs, etc.)
-3. **Project Template**: Select from:
+1. **Lustre Integration**: Choose whether to include Lustre for UI overlays (menus, HUDs, etc.)
+2. **Project Template**: Select from:
    - **2D Game** - Orthographic camera and sprite setup
    - **3D Game** - Perspective camera with lighting
    - **Physics Demo** - Physics-enabled objects
