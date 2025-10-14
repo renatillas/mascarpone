@@ -21,39 +21,68 @@ gleam run -m mascarpone
 The TUI will guide you through:
 
 1. **Lustre Integration**: Choose whether to include Lustre for UI overlays (menus, HUDs, etc.)
-2. **Project Template**: Select from:
+2. **Project Template** (Optional): Select from:
    - **2D Game** - Orthographic camera and sprite setup
    - **3D Game** - Perspective camera with lighting
    - **Physics Demo** - Physics-enabled objects
+   - **Skip** - Don't create template files (for existing projects)
+3. **Desktop Bundle**: Set up NW.js for desktop distribution
 
 ## What It Creates
 
-Mascarpone generates a fully-configured Tiramisu project with:
+Mascarpone sets up your Tiramisu project with:
 
-- `gleam.toml` with all necessary dependencies
+- Lustre dev tools installed to `priv/<project-name>/` with bundled Bun runtime
+- `gleam.toml` with all necessary dependencies (tiramisu, vec, lustre_dev_tools, optionally lustre)
 - `.gitignore` for Gleam projects
-- Main source file with a working game example
-- Lustre dev tools configuration (if selected)
-- Three.js and Rapier3D CDN imports (via import maps)
+- `package.json` and `node_modules/` with Three.js and Rapier3D installed via Bun
+- Main source file with a working game example (if template selected)
+- Lustre dev tools configuration with Three.js and Rapier3D import maps
+- Desktop bundling with NW.js (if selected):
+  - `nwjs-sdk/` - NW.js SDK for your current platform
+  - `dist/linux/`, `dist/windows/`, `dist/macos/` - Platform-specific distributions
+  - Updated `package.json` with NW.js application configuration
 
 
 ## Features
 
 - 🎨 Beautiful TUI powered by [Shore](https://hexdocs.pm/shore/)
 - 🚀 Quick project setup with sensible defaults
-- 🎮 Multiple game templates to start from
-- 📦 Automatic dependency management
+- 🎮 Multiple game templates to start from (optional)
+- 📦 Automatic dependency management via `gleam add`
+- 🖥️ Desktop bundling with NW.js for cross-platform distribution
 - ⚙️ Configurable options for Lustre UI and Rapier3D physics
+- ♻️ Can be run on existing projects to add NW.js support
 
 ## After Creation
 
-Once your project is created, run the dev server:
+### For Web Development
+
+Run the dev server:
 
 ```bash
 gleam run -m lustre/dev start
 ```
 
 Then open http://localhost:1234 in your browser to see your game!
+
+### For Desktop Development (if NW.js bundling was selected)
+
+1. Build your project:
+```bash
+gleam build --target javascript
+```
+
+2. Run with NW.js SDK:
+```bash
+./nwjs-sdk/nwjs/nw .
+```
+
+3. Distribute your game using the platform-specific builds in `dist/linux/`, `dist/windows/`, and `dist/macos/`
+
+## Using Mascarpone with Existing Projects
+
+⚠️ **Important**: If you're adding NW.js support to an existing project, make sure to **skip the template selection** when prompted. Selecting a template will overwrite your existing game code in `src/`!
 
 
 ## License
