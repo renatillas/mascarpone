@@ -148,7 +148,7 @@ fn view_welcome() -> shore.Node(Msg) {
       None,
     ),
     ui.text_styled(
-      "║   🎮 Tiramisu Project Creator 🎮   ║",
+      "║   🎮 Tiramisu Project Creator 🎮  ║",
       Some(style.Cyan),
       None,
     ),

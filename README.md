@@ -7,7 +7,7 @@ Named after the Italian cream cheese used in tiramisu, Mascarpone provides a del
 ## Installation
 
 ```bash
-gleam add mascarpone
+gleam add --dev mascarpone
 ```
 
 ## Usage
@@ -36,22 +36,6 @@ Mascarpone generates a fully-configured Tiramisu project with:
 - Lustre dev tools configuration (if selected)
 - Three.js and Rapier3D CDN imports (via import maps)
 
-## Example
-
-```bash
-$ gleam run -m mascarpone
-
-╔═══════════════════════════════════╗
-║   🎮 Tiramisu Project Creator 🎮  ║
-║   Gleam 3D Game Engine            ║
-╚═══════════════════════════════════╝
-
-Welcome to Tiramisu! 🍰
-
-This wizard will help you create a new game project.
-
-Press [Enter] to continue
-```
 
 ## Features
 
