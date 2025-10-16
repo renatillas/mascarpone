@@ -70,13 +70,13 @@ Then open http://localhost:1234 in your browser to see your game!
 
 1. Build your project:
 ```bash
-gleam build --target javascript
+gleam run -m lustre/dev build --outdir=/dist/<macos|windows|linux>
 ```
 
-2. Run with NW.js SDK:
-```bash
-./nwjs-sdk/nwjs/nw .
-```
+2. Run with NW.js for each distribution:
+- Windows: `./nwjs/nw.exe .`
+- Linux: `./nwjs/nw .`
+- MacOS: `./nwjs/nwjs.app/Contents/MacOS/nwjs .`
 
 3. Distribute your game using the platform-specific builds in `dist/linux/`, `dist/windows/`, and `dist/macos/`
 
