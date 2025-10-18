@@ -1,5 +1,5 @@
 name = "mascarpone"
-version = "1.1.0"
+version = "1.2.0"
 target = "erlang"
 description = "CLI tool for scaffolding Tiramisu game projects"
 licences = ["MIT"]
