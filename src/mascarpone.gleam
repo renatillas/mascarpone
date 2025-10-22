@@ -1,3 +1,4 @@
+import argv
 import filepath
 import gleam/erlang/process
 import gleam/io
@@ -16,6 +17,14 @@ import snag.{type Result as SnagResult}
 import tom
 
 pub fn main() {
+  // Check command-line arguments for bundle command
+  case argv.load().arguments {
+    ["bundle"] -> handle_bundle_command()
+    _ -> run_interactive_mode()
+  }
+}
+
+fn run_interactive_mode() -> Nil {
   let exit = process.new_subject()
 
   case get_project_name() {
@@ -35,6 +44,63 @@ pub fn main() {
     }
     Error(err) -> {
       io.println_error("\n❌ Error: " <> snag.pretty_print(err))
+    }
+  }
+}
+
+fn handle_bundle_command() -> Nil {
+  io.println("🎮 Starting desktop bundle build...")
+  io.println("")
+
+  case run_bundle_build() {
+    Ok(_) -> {
+      io.println("")
+      io.println("✅ Desktop bundle build complete!")
+      io.println("   Check the build directory for platform distributions.")
+    }
+    Error(err) -> {
+      io.println_error("")
+      io.println_error("❌ Bundle build failed: " <> snag.pretty_print(err))
+    }
+  }
+}
+
+fn run_bundle_build() -> SnagResult(Nil) {
+  let root = find_root(".")
+
+  // Detect platform and architecture for bun path
+  use platform <- result.try(detect_platform())
+  let arch = detect_architecture()
+
+  let platform_str = get_bun_platform_string(platform)
+  let arch_str = get_bun_arch_string(arch)
+
+  let bun_path =
+    filepath.join(
+      root,
+      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
+    )
+
+  // Check if bun exists
+  use bun_exists <- result.try(
+    simplifile.is_file(bun_path)
+    |> result.replace_error(snag.new("Could not check for bun executable")),
+  )
+
+  case bun_exists {
+    False ->
+      Error(snag.new(
+        "Bun executable not found at "
+        <> bun_path
+        <> ". Make sure lustre_dev_tools is properly installed.",
+      ))
+    True -> {
+      io.println("📦 Running bun run build...")
+
+      // Run bun run build
+      shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
+      |> result.replace_error(snag.new("Failed to run bun build command"))
+      |> result.replace(Nil)
     }
   }
 }
@@ -86,9 +152,9 @@ type Msg {
   UpdateGleamToml
   InstallNpmPackages
   CreateGitignore
+  CreateIndexHtml
   CreateMainFile
-  DetectPlatform(Platform)
-  DownloadNwjsSdk(Platform)
+  InstallNwBuilder
   SetupDesktopBundle
   GenerationComplete
   GenerationFailed(String)
@@ -229,23 +295,42 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
       let updated_model =
         update_step_status(model, "Creating .gitignore", StatusInProgress)
       case create_gitignore() {
+        Ok(_) -> #(
+          update_step_status(
+            updated_model,
+            "Creating .gitignore",
+            StatusComplete,
+          ),
+          [fn() { CreateIndexHtml }],
+        )
+        Error(err) -> #(
+          update_step_status(
+            updated_model,
+            "Creating .gitignore",
+            StatusFailed(snag.pretty_print(err)),
+          ),
+          [fn() { GenerationFailed(snag.pretty_print(err)) }],
+        )
+      }
+    }
+
+    CreateIndexHtml -> {
+      let updated_model =
+        update_step_status(model, "Creating index.html", StatusInProgress)
+      case create_index_html(model.project_name) {
         Ok(_) -> {
           let next_msg = case model.template {
             Some(_) -> fn() { CreateMainFile }
             None ->
               case model.bundle_desktop {
-                True ->
-                  case detect_platform() {
-                    Ok(platform) -> fn() { DetectPlatform(platform) }
-                    Error(_) -> fn() { GenerationComplete }
-                  }
+                True -> fn() { InstallNwBuilder }
                 False -> fn() { GenerationComplete }
               }
           }
           #(
             update_step_status(
               updated_model,
-              "Creating .gitignore",
+              "Creating index.html",
               StatusComplete,
             ),
             [next_msg],
@@ -254,7 +339,7 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
         Error(err) -> #(
           update_step_status(
             updated_model,
-            "Creating .gitignore",
+            "Creating index.html",
             StatusFailed(snag.pretty_print(err)),
           ),
           [fn() { GenerationFailed(snag.pretty_print(err)) }],
@@ -273,26 +358,14 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
       {
         Ok(_) ->
           case model.bundle_desktop {
-            True -> {
-              case detect_platform() {
-                Ok(platform) -> #(
-                  update_step_status(
-                    updated_model,
-                    "Creating main game file",
-                    StatusComplete,
-                  ),
-                  [fn() { DetectPlatform(platform) }],
-                )
-                Error(err) -> #(
-                  update_step_status(
-                    updated_model,
-                    "Creating main game file",
-                    StatusFailed(snag.pretty_print(err)),
-                  ),
-                  [fn() { GenerationFailed(snag.pretty_print(err)) }],
-                )
-              }
-            }
+            True -> #(
+              update_step_status(
+                updated_model,
+                "Creating main game file",
+                StatusComplete,
+              ),
+              [fn() { InstallNwBuilder }],
+            )
             False -> #(
               update_step_status(
                 updated_model,
@@ -313,23 +386,14 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
       }
     }
 
-    DetectPlatform(platform) -> {
+    InstallNwBuilder -> {
       let updated_model =
-        update_step_status(model, "Detecting platform", StatusInProgress)
-      #(
-        update_step_status(updated_model, "Detecting platform", StatusComplete),
-        [fn() { DownloadNwjsSdk(platform) }],
-      )
-    }
-
-    DownloadNwjsSdk(platform) -> {
-      let updated_model =
-        update_step_status(model, "Downloading NW.js SDK", StatusInProgress)
-      case download_nwjs_sdk(platform) {
+        update_step_status(model, "Installing nw-builder", StatusInProgress)
+      case install_nwbuilder() {
         Ok(_) -> #(
           update_step_status(
             updated_model,
-            "Downloading NW.js SDK",
+            "Installing nw-builder",
             StatusComplete,
           ),
           [fn() { SetupDesktopBundle }],
@@ -337,7 +401,7 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
         Error(err) -> #(
           update_step_status(
             updated_model,
-            "Downloading NW.js SDK",
+            "Installing nw-builder",
             StatusFailed(snag.pretty_print(err)),
           ),
           [fn() { GenerationFailed(snag.pretty_print(err)) }],
@@ -347,16 +411,12 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
 
     SetupDesktopBundle -> {
       let updated_model =
-        update_step_status(
-          model,
-          "Setting up platform distributions",
-          StatusInProgress,
-        )
+        update_step_status(model, "Setting up desktop bundle", StatusInProgress)
       case setup_desktop_bundle(model.project_name) {
         Ok(_) -> #(
           update_step_status(
             updated_model,
-            "Setting up platform distributions",
+            "Setting up desktop bundle",
             StatusComplete,
           ),
           [fn() { GenerationComplete }],
@@ -364,7 +424,7 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
         Error(err) -> #(
           update_step_status(
             updated_model,
-            "Setting up platform distributions",
+            "Setting up desktop bundle",
             StatusFailed(snag.pretty_print(err)),
           ),
           [fn() { GenerationFailed(snag.pretty_print(err)) }],
@@ -391,6 +451,7 @@ fn generate_steps_list(model: Model) -> List(GenerationStep) {
     StepPending("Updating gleam.toml"),
     StepPending("Installing Three.js and Rapier3D"),
     StepPending("Creating .gitignore"),
+    StepPending("Creating index.html"),
   ]
 
   let with_template = case model.template {
@@ -401,9 +462,8 @@ fn generate_steps_list(model: Model) -> List(GenerationStep) {
   case model.bundle_desktop {
     True ->
       list.append(with_template, [
-        StepPending("Detecting platform"),
-        StepPending("Downloading NW.js SDK"),
-        StepPending("Setting up platform distributions"),
+        StepPending("Installing nw-builder"),
+        StepPending("Setting up desktop bundle"),
       ])
     False -> with_template
   }
@@ -484,6 +544,8 @@ fn view_welcome() -> shore.Node(Msg) {
     ui.text(""),
     ui.hr(),
     ui.text(""),
+    ui.text_styled("Press Enter to continue", Some(style.Yellow), None),
+    ui.text(""),
     ui.button("Continue", key.Enter, NextStep),
   ])
 }
@@ -553,10 +615,11 @@ fn view_desktop_bundle_choice() -> shore.Node(Msg) {
     ui.text_styled("Desktop Bundle for NW.js", Some(style.Cyan), None),
     ui.text(""),
     ui.text("Bundle for desktop will:"),
-    ui.text("  • Download NW.js SDK for your current platform"),
-    ui.text("  • Create dist folders for Linux, Windows, and macOS"),
-    ui.text("  • Download NW.js executables for each platform"),
-    ui.text("  • Copy your game files and package.json to each dist folder"),
+    ui.text("  • Install nw-builder to manage NW.js builds"),
+    ui.text("  • Configure package.json with NW.js settings"),
+    ui.text("  • Set up build configuration for all platforms"),
+    ui.text(""),
+    ui.text("After setup, run 'bun run build' to create platform builds"),
     ui.text(""),
     ui.hr(),
     ui.text(""),
@@ -645,24 +708,17 @@ fn view_complete(model: Model) -> shore.Node(Msg) {
 
   let next_steps = case model.bundle_desktop {
     True -> [
-      ui.text("1. Build your project:"),
-      ui.text_styled(
-        "   gleam run -m lustre/dev build --outdir=\"dist/<your-platform>\"",
-        Some(style.Cyan),
-        None,
-      ),
+      ui.text("1. Build platform distributions:"),
+      ui.text_styled("   bun run build", Some(style.Cyan), None),
       ui.text(""),
-      ui.text("2. Run the desktop app using NW.js SDK in the project folder"),
-      ui.text_styled(
-        "   /dist/<your-platform>/path/to/nw .",
-        Some(style.Cyan),
-        None,
-      ),
+      ui.text("2. Find your builds in the ./build directory:"),
+      ui.text("   • build/nwjs-v*-linux-x64/"),
+      ui.text("   • build/nwjs-v*-win-x64/"),
+      ui.text("   • build/nwjs-v*-osx-arm64/"),
       ui.text(""),
-      ui.text("3. Distribute using platform-specific builds in:"),
-      ui.text("   • dist/linux/"),
-      ui.text("   • dist/windows/"),
-      ui.text("   • dist/macos/"),
+      ui.text("3. Or run in dev mode:"),
+      ui.text_styled("   gleam run -m lustre/dev start", Some(style.Cyan), None),
+      ui.text("   Then open http://localhost:1234 in your browser"),
     ]
     False -> [
       ui.text("1. Start the dev server:"),
@@ -845,11 +901,54 @@ erl_crash.dump
 /priv
 .DS_Store
 node_modules/
-dist/
 .lustre/"
 
   simplifile.write(gitignore_path, content)
   |> snag.map_error(fn(_) { "Could not write .gitignore" })
+}
+
+fn create_index_html(project_name: String) -> SnagResult(Nil) {
+  let root = find_root(".")
+  let index_path = filepath.join(root, "index.html")
+
+  let content = "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <title>" <> project_name <> "</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; }
+    </style>
+    <script type=\"importmap\">
+    {
+        \"imports\": {
+            \"three\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js\",
+            \"three/addons/\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/\",
+            \"@dimforge/rapier3d-compat\": \"https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.11.2/+esm\"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- Lustre UI overlay container -->
+    <div id=\"app\"></div>
+
+    <!-- Load the application using Node.js context -->
+    <script>
+      import('./build/dev/javascript/" <> project_name <> "/" <> project_name <> ".mjs')
+        .then(module => {
+          module.main();
+        })
+        .catch(err => {
+          console.error('Failed to load application:', err);
+        });
+    </script>
+</body>
+</html>"
+
+  simplifile.write(index_path, content)
+  |> snag.map_error(fn(_) { "Could not write index.html" })
 }
 
 fn create_main_file(project_name: String, template: Template) -> SnagResult(Nil) {
@@ -913,7 +1012,7 @@ fn update(
 ) -> #(Model, Effect(Msg), option.Option(_)) {
   case msg {
     Tick -> {
-      let new_time = model.time +. ctx.delta_time
+      let new_time = model.time +. ctx.delta_time /. 1000.0
       #(Model(time: new_time), effect.tick(Tick), option.None)
     }
   }
@@ -928,7 +1027,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
   let assert Ok(sprite_mat) = material.basic(color: 0xff0066, transparent: False, opacity: 1.0, map: option.None)
 
   [
-    scene.Camera(
+    scene.camera(
       id: \"camera\",
       camera: cam,
       transform: transform.at(position: vec3.Vec3(0.0, 0.0, 20.0)),
@@ -936,7 +1035,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
       active: True,
       viewport: option.None,
     ),
-    scene.Light(
+    scene.light(
       id: \"ambient\",
       light: {
         let assert Ok(light) = light.ambient(color: 0xffffff, intensity: 1.0)
@@ -944,13 +1043,13 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
       },
       transform: transform.identity,
     ),
-    scene.Mesh(
+    scene.mesh(
       id: \"sprite\",
       geometry: sprite_geom,
       material: sprite_mat,
       transform: 
         transform.at(position: vec3.Vec3(0.0, 0.0, 0.0))
-        |> transform.with_rotation(rotation: vec3.Vec3(0.0, 0.0, model.time))
+        |> transform.with_euler_rotation(vec3.Vec3(0.0, 0.0, model.time)),
       physics: option.None,
     ),
   ]
@@ -1015,7 +1114,7 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
   [
-    scene.Camera(
+    scene.camera(
       id: \"camera\",
       camera: cam,
       transform: transform.at(position: vec3.Vec3(0.0, 5.0, 10.0)),
@@ -1023,7 +1122,7 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
       active: True,
       viewport: option.None,
     ),
-    scene.Light(
+    scene.light(
       id: \"ambient\",
       light: {
         let assert Ok(light) = light.ambient(color: 0xffffff, intensity: 0.5)
@@ -1031,7 +1130,7 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
       },
       transform: transform.identity,
     ),
-    scene.Light(
+    scene.light(
       id: \"directional\",
       light: {
         let assert Ok(light) = light.directional(color: 0xffffff, intensity: 0.8)
@@ -1039,21 +1138,20 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
       },
       transform: transform.at(position: vec3.Vec3(10.0, 10.0, 10.0)),
     ),
-    scene.Mesh(
+    scene.mesh(
       id: \"sphere\",
       geometry: sphere_geom,
       material: sphere_mat,
       transform: transform.at(position: vec3.Vec3(0.0, 0.0, 0.0)),
       physics: option.None,
     ),
-    scene.Mesh(
+    scene.mesh(
       id: \"ground\",
       geometry: ground_geom,
       material: ground_mat,
       transform: 
         transform.at(position: vec3.Vec3(0.0, -2.0, 0.0)) 
-        |> transform.with_rotation(vec3.Vec3(-1.57, 0.0, 0.0))
-      ),
+        |> transform.with_euler_rotation(vec3.Vec3(-1.57, 0.0, 0.0)),
       physics: option.None,
     ),
   ]
@@ -1140,7 +1238,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
   [
-    scene.Camera(
+    scene.camera(
       id: Camera,
       camera: cam,
       transform: transform.at(position: vec3.Vec3(0.0, 10.0, 15.0)),
@@ -1148,7 +1246,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       active: True,
       viewport: option.None,
     ),
-    scene.Light(
+    scene.light(
       id: Ambient,
       light: {
         let assert Ok(light) = light.ambient(color: 0xffffff, intensity: 0.5)
@@ -1156,7 +1254,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       },
       transform: transform.identity,
     ),
-    scene.Light(
+    scene.light(
       id: Directional,
       light: {
         let assert Ok(light) = light.directional(color: 0xffffff, intensity: 2.0)
@@ -1165,7 +1263,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       transform: transform.at(position: vec3.Vec3(5.0, 10.0, 7.5)),
     ),
     // Ground (static physics body)
-    scene.Mesh(
+    scene.mesh(
       id: Ground,
       geometry: ground_geom,
       material: ground_mat,
@@ -1178,7 +1276,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       ),
     ),
     // Falling cube 1 (dynamic physics body)
-    scene.Mesh(
+    scene.mesh(
       id: Cube1,
       geometry: cube_geom,
       material: cube1_mat,
@@ -1196,7 +1294,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       ),
     ),
     // Falling cube 2 (dynamic physics body)
-    scene.Mesh(
+    scene.mesh(
       id: Cube2,
       geometry: cube_geom,
       material: cube2_mat,
@@ -1317,217 +1415,47 @@ fn install_npm_packages() -> SnagResult(Nil) {
   }
 }
 
-fn platform_to_string(platform: Platform) -> String {
-  case platform {
-    Linux -> "linux"
-    MacOS -> "osx"
-    Windows -> "win"
-  }
-}
-
-fn download_nwjs_sdk(platform: Platform) -> SnagResult(Nil) {
+fn install_nwbuilder() -> SnagResult(Nil) {
   let root = find_root(".")
-  let nwjs_version = "0.104.1"
-  let platform_str = platform_to_string(platform)
-  let arch = case platform {
-    MacOS -> "arm64"
-    _ -> "x64"
-  }
 
-  let filename =
-    "nwjs-sdk-v" <> nwjs_version <> "-" <> platform_str <> "-" <> arch
-  let archive_ext = case platform {
-    Windows | MacOS -> ".zip"
-    _ -> ".tar.gz"
-  }
+  // Detect platform and architecture for bun path
+  use platform <- result.try(detect_platform())
+  let arch = detect_architecture()
 
-  let url =
-    "https://dl.nwjs.io/v" <> nwjs_version <> "/" <> filename <> archive_ext
-  let nwjs_dir = filepath.join(root, "nwjs-sdk")
+  let platform_str = get_bun_platform_string(platform)
+  let arch_str = get_bun_arch_string(arch)
 
-  // Create nwjs-sdk directory if it doesn't exist
-  let _ = simplifile.create_directory(nwjs_dir)
-
-  let archive_path = filepath.join(nwjs_dir, filename <> archive_ext)
-
-  // Download using curl with fail flag
-  use download_result <- result.try(
-    shellout.command(
-      run: "curl",
-      with: ["-L", "-f", "-o", archive_path, url],
-      in: ".",
-      opt: [],
+  let bun_path =
+    filepath.join(
+      root,
+      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
     )
-    |> result.map_error(fn(error) {
-      snag.new("Failed to download NW.js SDK from " <> url <> ": " <> error.1)
-    }),
+
+  // Check if bun exists
+  use bun_exists <- result.try(
+    simplifile.is_file(bun_path)
+    |> result.replace_error(snag.new("Could not check for bun executable")),
   )
 
-  // Verify the file was downloaded
-  use file_exists <- result.try(
-    simplifile.is_file(archive_path)
-    |> result.replace_error(snag.new("Could not verify downloaded file")),
-  )
-
-  use _ <- result.try(case file_exists {
-    False -> Error(snag.new("Downloaded file does not exist: " <> archive_path))
-    True -> {
-      // Extract archive
-      use _ <- result.try(case platform {
-        Windows ->
-          shellout.command(
-            run: "unzip",
-            with: ["-q", filename <> archive_ext],
-            in: nwjs_dir,
-            opt: [],
-          )
-          |> result.map_error(fn(error) {
-            snag.new("Failed to extract NW.js SDK: " <> error.1)
-          })
-        _ ->
-          shellout.command(
-            run: "tar",
-            with: ["-xzf", filename <> archive_ext],
-            in: nwjs_dir,
-            opt: [],
-          )
-          |> result.map_error(fn(error) {
-            snag.new("Failed to extract NW.js SDK: " <> error.1)
-          })
-      })
-
-      Ok(download_result)
-    }
-  })
-
-  // Rename extracted directory to just "nwjs"
-  let extracted_dir = filepath.join(nwjs_dir, filename)
-  let target_dir = filepath.join(nwjs_dir, "nwjs")
-  let _ = simplifile.delete(target_dir)
-  use _ <- result.try(
-    shellout.command(
-      run: "mv",
-      with: [extracted_dir, target_dir],
-      in: ".",
-      opt: [],
-    )
-    |> result.replace_error(snag.new("Failed to rename NW.js SDK directory")),
-  )
-
-  // Remove archive
-  let _ = simplifile.delete(archive_path)
-
-  Ok(Nil)
-}
-
-fn download_nwjs_for_platform(
-  platform: Platform,
-  dist_platform_dir: String,
-) -> SnagResult(Nil) {
-  let nwjs_version = "0.104.1"
-  let platform_str = platform_to_string(platform)
-  let arch = case platform {
-    MacOS -> "arm64"
-    _ -> "x64"
-  }
-
-  let filename = "nwjs-v" <> nwjs_version <> "-" <> platform_str <> "-" <> arch
-  let archive_ext = case platform {
-    MacOS | Windows -> ".zip"
-    _ -> ".tar.gz"
-  }
-
-  let url =
-    "https://dl.nwjs.io/v" <> nwjs_version <> "/" <> filename <> archive_ext
-  let archive_path = filepath.join(dist_platform_dir, filename <> archive_ext)
-
-  // Download using curl with fail flag
-  use download_result <- result.try(
-    shellout.command(
-      run: "curl",
-      with: ["-L", "-f", "-o", archive_path, url],
-      in: ".",
-      opt: [],
-    )
-    |> result.map_error(fn(error) {
-      snag.new(
-        "Failed to download NW.js for "
-        <> platform_str
-        <> " from "
-        <> url
-        <> ": "
-        <> error.1,
-      )
-    }),
-  )
-
-  // Verify the file was downloaded
-  use file_exists <- result.try(
-    simplifile.is_file(archive_path)
-    |> result.replace_error(snag.new("Could not verify downloaded file")),
-  )
-
-  use _ <- result.try(case file_exists {
+  case bun_exists {
     False ->
       Error(snag.new(
-        "Downloaded file does not exist for "
-        <> platform_str
-        <> ": "
-        <> archive_path,
+        "Bun executable not found at "
+        <> bun_path
+        <> ". Make sure lustre_dev_tools is properly installed.",
       ))
     True -> {
-      // Extract archive
-      use _ <- result.try(case platform {
-        Windows ->
-          shellout.command(
-            run: "unzip",
-            with: ["-q", filename <> archive_ext],
-            in: dist_platform_dir,
-            opt: [],
-          )
-          |> result.map_error(fn(error) {
-            snag.new(
-              "Failed to extract NW.js for " <> platform_str <> ": " <> error.1,
-            )
-          })
-        _ ->
-          shellout.command(
-            run: "tar",
-            with: ["-xzf", filename <> archive_ext],
-            in: dist_platform_dir,
-            opt: [],
-          )
-          |> result.map_error(fn(error) {
-            snag.new(
-              "Failed to extract NW.js for " <> platform_str <> ": " <> error.1,
-            )
-          })
-      })
-
-      Ok(download_result)
+      // Install nw-builder
+      shellout.command(
+        run: bun_path,
+        with: ["add", "--dev", "nw-builder@^4.16.0"],
+        in: root,
+        opt: [],
+      )
+      |> result.replace_error(snag.new("Failed to install nw-builder"))
+      |> result.replace(Nil)
     }
-  })
-
-  // Rename extracted directory to just "nwjs"
-  let extracted_dir = filepath.join(dist_platform_dir, filename)
-  let target_dir = filepath.join(dist_platform_dir, "nwjs")
-  let _ = simplifile.delete(target_dir)
-  use _ <- result.try(
-    shellout.command(
-      run: "mv",
-      with: [extracted_dir, target_dir],
-      in: ".",
-      opt: [],
-    )
-    |> result.replace_error(snag.new(
-      "Failed to rename NW.js directory for " <> platform_str,
-    )),
-  )
-
-  // Remove archive
-  let _ = simplifile.delete(archive_path)
-
-  Ok(Nil)
+  }
 }
 
 fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
@@ -1537,8 +1465,32 @@ fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
   \"window\": {
     \"title\": \"" <> project_name <> "\",
     \"width\": 1920,
-    \"height\": 1080
-  }"
+    \"height\": 1080,
+    \"nodejs\": true
+  },
+  \"scripts\": {
+    \"build\": \"gleam build && nwbuild --glob=false .\"
+  },
+  \"nwbuild\": {
+    \"flavor\": \"sdk\",
+    \"srcDir\": \".\",
+    \"mode\": \"build\",
+    \"glob\": false,
+    \"logLevel\": \"info\",
+    \"app\": {
+      \"icon\": \"\",
+      \"LSApplicationCategoryType\": \"public.app-category.games\",
+      \"NSHumanReadableCopyright\": \"Copyright © 2025\",
+      \"NSLocalNetworkUsageDescription\": \"This application uses the local network.\"
+    },
+    \"outDir\": \"../" <> project_name <> "_build\",
+    \"macCategory\": \"public.app-category.games\",
+    \"cacheDir\": \"./node_modules/nw\"
+  },
+  \"devDependencies\": {
+    \"nw-builder\": \"^4.16.0\"
+  },
+  \"node-remote\": [\"https://cdn.jsdelivr.net/*\"]"
     False -> ""
   }
 
@@ -1554,50 +1506,10 @@ fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
 
 fn setup_desktop_bundle(project_name: String) -> SnagResult(Nil) {
   let root = find_root(".")
-  let dist_dir = filepath.join(root, "dist")
 
-  // Create dist directory
-  let _ = simplifile.create_directory(dist_dir)
-
-  // Update package.json with NW.js configuration
+  // Create package.json with NW.js configuration
   let package_json_path = filepath.join(root, "package.json")
   let package_json_content = create_package_json(project_name, True)
-  use _ <- result.try(
-    simplifile.write(package_json_path, package_json_content)
-    |> snag.map_error(fn(_) { "Could not write package.json" }),
-  )
-
-  // Create platform-specific directories and download NW.js for each
-  let platforms = [
-    #(Linux, "linux"),
-    #(MacOS, "macos"),
-    #(Windows, "windows"),
-  ]
-
-  use _ <- result.try(
-    list.try_each(platforms, fn(platform_tuple) {
-      let #(platform, dir_name) = platform_tuple
-      let platform_dir = filepath.join(dist_dir, dir_name)
-
-      // Create platform directory
-      let _ = simplifile.create_directory(platform_dir)
-
-      // Download NW.js for this platform
-      use _ <- result.try(download_nwjs_for_platform(platform, platform_dir))
-
-      // Copy package.json to platform directory
-      let package_json_src = filepath.join(root, "package.json")
-      let package_json_dest = filepath.join(platform_dir, "package.json")
-      use _ <- result.try(
-        simplifile.copy_file(package_json_src, package_json_dest)
-        |> snag.map_error(fn(_) {
-          "Could not copy package.json to " <> dir_name
-        }),
-      )
-
-      Ok(Nil)
-    }),
-  )
-
-  Ok(Nil)
+  simplifile.write(package_json_path, package_json_content)
+  |> snag.map_error(fn(_) { "Could not write package.json" })
 }

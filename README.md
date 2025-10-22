@@ -68,18 +68,21 @@ Then open http://localhost:1234 in your browser to see your game!
 
 ### For Desktop Development (if NW.js bundling was selected)
 
-1. Build your project:
+#### Building Desktop Distributions
+
+If you set up NW.js bundling during project creation, you can build platform-specific distributions with a single command:
+
 ```bash
-gleam run -m lustre/dev build --outdir=<your-desired-folder>
-cd your-desired-folder
+gleam run -m mascarpone bundle
 ```
 
-2. Run with NW.js for each distribution:
-- Windows: `./nwjs-sdk/nwjs/nw.exe .`
-- Linux: `./nwjs-sdk/nwjs/nw .`
-- MacOS: `./nwjs-sdk/nwjs/nwjs.app/Contents/MacOS/nwjs .`
+This command:
+- Uses the Bun runtime from lustre-dev-tools
+- Runs `bun run build` which executes the build script in your `package.json`
+- Compiles your Gleam code with `gleam build`
+- Creates platform distributions with `nwbuild`
 
-3. Distribute your game using the platform-specific builds in `dist/linux/`, `dist/windows/`, and `dist/macos/`
+The built distributions will be available in the directory specified in your `package.json` (typically `../<project-name>_build/`).
 
 ## Using Mascarpone with Existing Projects
 
