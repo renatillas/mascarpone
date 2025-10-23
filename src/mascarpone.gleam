@@ -152,7 +152,6 @@ type Msg {
   UpdateGleamToml
   InstallNpmPackages
   CreateGitignore
-  CreateIndexHtml
   CreateMainFile
   InstallNwBuilder
   SetupDesktopBundle
@@ -301,45 +300,23 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
             "Creating .gitignore",
             StatusComplete,
           ),
-          [fn() { CreateIndexHtml }],
+          [
+            fn() {
+              let next_msg = case model.template {
+                Some(_) -> CreateMainFile
+                None ->
+                  case model.bundle_desktop {
+                    True -> InstallNwBuilder
+                    False -> GenerationComplete
+                  }
+              }
+            },
+          ],
         )
         Error(err) -> #(
           update_step_status(
             updated_model,
             "Creating .gitignore",
-            StatusFailed(snag.pretty_print(err)),
-          ),
-          [fn() { GenerationFailed(snag.pretty_print(err)) }],
-        )
-      }
-    }
-
-    CreateIndexHtml -> {
-      let updated_model =
-        update_step_status(model, "Creating index.html", StatusInProgress)
-      case create_index_html(model.project_name) {
-        Ok(_) -> {
-          let next_msg = case model.template {
-            Some(_) -> fn() { CreateMainFile }
-            None ->
-              case model.bundle_desktop {
-                True -> fn() { InstallNwBuilder }
-                False -> fn() { GenerationComplete }
-              }
-          }
-          #(
-            update_step_status(
-              updated_model,
-              "Creating index.html",
-              StatusComplete,
-            ),
-            [next_msg],
-          )
-        }
-        Error(err) -> #(
-          update_step_status(
-            updated_model,
-            "Creating index.html",
             StatusFailed(snag.pretty_print(err)),
           ),
           [fn() { GenerationFailed(snag.pretty_print(err)) }],
@@ -711,10 +688,18 @@ fn view_complete(model: Model) -> shore.Node(Msg) {
       ui.text("1. Build platform distributions:"),
       ui.text_styled("   bun run build", Some(style.Cyan), None),
       ui.text(""),
-      ui.text("2. Find your builds in the ./build directory:"),
-      ui.text("   • build/nwjs-v*-linux-x64/"),
-      ui.text("   • build/nwjs-v*-win-x64/"),
-      ui.text("   • build/nwjs-v*-osx-arm64/"),
+      ui.text(
+        "2. Find your builds in ./" <> model.project_name <> "_desktop_bundle/:",
+      ),
+      ui.text(
+        "   • " <> model.project_name <> "_desktop_bundle/nwjs-v*-linux-x64/",
+      ),
+      ui.text(
+        "   • " <> model.project_name <> "_desktop_bundle/nwjs-v*-win-x64/",
+      ),
+      ui.text(
+        "   • " <> model.project_name <> "_desktop_bundle/nwjs-v*-osx-arm64/",
+      ),
       ui.text(""),
       ui.text("3. Or run in dev mode:"),
       ui.text_styled("   gleam run -m lustre/dev start", Some(style.Cyan), None),
@@ -901,54 +886,12 @@ erl_crash.dump
 /priv
 .DS_Store
 node_modules/
-.lustre/"
+.lustre/
+dist/
+*_desktop_bundle/"
 
   simplifile.write(gitignore_path, content)
   |> snag.map_error(fn(_) { "Could not write .gitignore" })
-}
-
-fn create_index_html(project_name: String) -> SnagResult(Nil) {
-  let root = find_root(".")
-  let index_path = filepath.join(root, "index.html")
-
-  let content = "<!DOCTYPE html>
-<html lang=\"en\">
-<head>
-    <meta charset=\"UTF-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-    <title>" <> project_name <> "</title>
-    <style>
-        body { margin: 0; padding: 0; overflow: hidden; }
-    </style>
-    <script type=\"importmap\">
-    {
-        \"imports\": {
-            \"three\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js\",
-            \"three/addons/\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/\",
-            \"@dimforge/rapier3d-compat\": \"https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.11.2/+esm\"
-        }
-    }
-    </script>
-</head>
-<body>
-    <!-- Lustre UI overlay container -->
-    <div id=\"app\"></div>
-
-    <!-- Load the application using Node.js context -->
-    <script>
-      import('./build/dev/javascript/" <> project_name <> "/" <> project_name <> ".mjs')
-        .then(module => {
-          module.main();
-        })
-        .catch(err => {
-          console.error('Failed to load application:', err);
-        });
-    </script>
-</body>
-</html>"
-
-  simplifile.write(index_path, content)
-  |> snag.map_error(fn(_) { "Could not write index.html" })
 }
 
 fn create_main_file(project_name: String, template: Template) -> SnagResult(Nil) {
@@ -1469,11 +1412,11 @@ fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
     \"nodejs\": true
   },
   \"scripts\": {
-    \"build\": \"gleam build && nwbuild --glob=false .\"
+    \"build\": \"gleam run -m lustre/dev build && cp package.json dist/ && nwbuild --glob=false dist\"
   },
   \"nwbuild\": {
     \"flavor\": \"sdk\",
-    \"srcDir\": \".\",
+    \"srcDir\": \"dist\",
     \"mode\": \"build\",
     \"glob\": false,
     \"logLevel\": \"info\",
@@ -1483,7 +1426,7 @@ fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
       \"NSHumanReadableCopyright\": \"Copyright © 2025\",
       \"NSLocalNetworkUsageDescription\": \"This application uses the local network.\"
     },
-    \"outDir\": \"../" <> project_name <> "_build\",
+    \"outDir\": \"./" <> project_name <> "_desktop_bundle\",
     \"macCategory\": \"public.app-category.games\",
     \"cacheDir\": \"./node_modules/nw\"
   },

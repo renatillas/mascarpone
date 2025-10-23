@@ -6,3 +6,5 @@ erl_crash.dump
 .DS_Store
 node_modules/
 .lustre/
+dist/
+*_desktop_bundle/
