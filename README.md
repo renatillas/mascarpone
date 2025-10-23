@@ -38,10 +38,6 @@ Mascarpone sets up your Tiramisu project with:
 - `package.json` and `node_modules/` with Three.js and Rapier3D installed via Bun
 - Main source file with a working game example (if template selected)
 - Lustre dev tools configuration with Three.js and Rapier3D import maps
-- Desktop bundling with NW.js (if selected):
-  - `nwjs-sdk/` - NW.js SDK for your current platform
-  - `dist/linux/`, `dist/windows/`, `dist/macos/` - Platform-specific distributions
-  - Updated `package.json` with NW.js application configuration
 
 
 ## Features
@@ -97,3 +93,5 @@ MIT
 
 - [Tiramisu](https://github.com/renatillas/tiramisu) - Gleam 3D game engine
 - [Shore](https://hexdocs.pm/shore/) - Terminal UI framework for Gleam
+- [NW.js](https://nwjs.io/) - Terminal UI framework for Gleam
+- [nwbuilder](https://github.com/nwutils/nw-builder) - Terminal UI framework for Gleam
