@@ -302,7 +302,7 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
           ),
           [
             fn() {
-              let next_msg = case model.template {
+              case model.template {
                 Some(_) -> CreateMainFile
                 None ->
                   case model.bundle_desktop {
