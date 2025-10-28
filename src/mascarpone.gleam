@@ -750,7 +750,9 @@ fn install_lustre_dev_tools() -> SnagResult(Nil) {
     in: root,
     opt: [],
   )
-  |> result.replace_error(snag.new("Failed to install Lustre dev tools"))
+  |> result.replace_error(snag.new(
+    "Failed to install Lustre dev tools, check if you have rebar3",
+  ))
   |> result.replace(Nil)
 }
 
