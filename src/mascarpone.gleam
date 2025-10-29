@@ -84,7 +84,9 @@ fn run_bundle_build() -> SnagResult(Nil) {
   // Check if bun exists
   use bun_exists <- result.try(
     simplifile.is_file(bun_path)
-    |> result.replace_error(snag.new("Could not check for bun executable")),
+    |> snag.map_error(fn(error) {
+      "Could not check for bun executable: " <> simplifile.describe_error(error)
+    }),
   )
 
   case bun_exists {
@@ -99,7 +101,9 @@ fn run_bundle_build() -> SnagResult(Nil) {
 
       // Run bun run build
       shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
-      |> result.replace_error(snag.new("Failed to run bun build command"))
+      |> snag.map_error(fn(error) {
+        "Failed to run bun build command: " <> error.1
+      })
       |> result.replace(Nil)
     }
   }
@@ -750,7 +754,9 @@ fn install_lustre_dev_tools() -> SnagResult(Nil) {
     in: root,
     opt: [],
   )
-  |> result.replace_error(snag.new("Failed to install Lustre dev tools"))
+  |> result.map_error(fn(error) {
+    snag.new("Failed to install Lustre dev tools: " <> error.1)
+  })
   |> result.replace(Nil)
 }
 
@@ -820,12 +826,14 @@ fn update_gleam_toml(
   // Add dependencies using gleam add
   use _ <- result.try(
     shellout.command(run: "gleam", with: ["add", "tiramisu"], in: root, opt: [])
-    |> result.replace_error(snag.new("Failed to add tiramisu dependency")),
+    |> snag.map_error(fn(error) {
+      "Failed to add tiramisu dependency: " <> error.1
+    }),
   )
 
   use _ <- result.try(
     shellout.command(run: "gleam", with: ["add", "vec"], in: root, opt: [])
-    |> result.replace_error(snag.new("Failed to add vec dependency")),
+    |> snag.map_error(fn(error) { "Failed to add vec dependency: " <> error.1 }),
   )
 
   use _ <- result.try(
@@ -835,16 +843,18 @@ fn update_gleam_toml(
       in: root,
       opt: [],
     )
-    |> result.replace_error(snag.new(
-      "Failed to add lustre_dev_tools dependency",
-    )),
+    |> snag.map_error(fn(error) {
+      "Failed to add lustre_dev_tools dependency: " <> error.1
+    }),
   )
 
   // Add lustre if requested
   use _ <- result.try(case include_lustre {
     True ->
       shellout.command(run: "gleam", with: ["add", "lustre"], in: root, opt: [])
-      |> result.replace_error(snag.new("Failed to add lustre dependency"))
+      |> snag.map_error(fn(error) {
+        "Failed to add lustre dependency: " <> error.1
+      })
     False -> Ok("")
   })
 
@@ -1324,7 +1334,9 @@ fn install_npm_packages() -> SnagResult(Nil) {
   // Check if bun exists
   use bun_exists <- result.try(
     simplifile.is_file(bun_path)
-    |> result.replace_error(snag.new("Could not check for bun executable")),
+    |> snag.map_error(fn(error) {
+      "Could not check for bun executable: " <> simplifile.describe_error(error)
+    }),
   )
 
   case bun_exists {
@@ -1343,7 +1355,9 @@ fn install_npm_packages() -> SnagResult(Nil) {
           in: root,
           opt: [],
         )
-        |> result.replace_error(snag.new("Failed to install three.js")),
+        |> snag.map_error(fn(error) {
+          "Failed to install three.js 0.180.0: " <> error.1
+        }),
       )
 
       shellout.command(
@@ -1352,7 +1366,7 @@ fn install_npm_packages() -> SnagResult(Nil) {
         in: root,
         opt: [],
       )
-      |> result.replace_error(snag.new("Failed to install Rapier3D"))
+      |> snag.map_error(fn(error) { "Failed to install Rapier3D: " <> error.1 })
       |> result.replace(Nil)
     }
   }
@@ -1377,7 +1391,9 @@ fn install_nwbuilder() -> SnagResult(Nil) {
   // Check if bun exists
   use bun_exists <- result.try(
     simplifile.is_file(bun_path)
-    |> result.replace_error(snag.new("Could not check for bun executable")),
+    |> snag.map_error(fn(error) {
+      "Could not check for bun executable: " <> simplifile.describe_error(error)
+    }),
   )
 
   case bun_exists {
@@ -1395,7 +1411,9 @@ fn install_nwbuilder() -> SnagResult(Nil) {
         in: root,
         opt: [],
       )
-      |> result.replace_error(snag.new("Failed to install nw-builder"))
+      |> snag.map_error(fn(error) {
+        "Failed to install nw-builder: " <> error.1
+      })
       |> result.replace(Nil)
     }
   }
