@@ -65,10 +65,92 @@ fn handle_bundle_command() -> Nil {
   }
 }
 
-fn run_bundle_build() -> SnagResult(Nil) {
-  let root = find_root(".")
+/// Locates the bun executable based on configuration priority:
+/// 1. gleam.toml [tools.mascarpone.bin] configuration
+/// 2. System bun in PATH
+/// 3. Bundled bun from lustre_dev_tools
+fn locate_bun() -> SnagResult(String) {
+  // First check gleam.toml configuration
+  case read_bun_config() {
+    Ok(config) ->
+      case config {
+        "system" -> {
+          // Config says use system bun
+          case try_system_bun() {
+            Ok(path) -> {
+              io.println("🔍 Using system bun (configured in gleam.toml)")
+              Ok(path)
+            }
+            Error(_) ->
+              Error(snag.new(
+                "gleam.toml specifies 'system' bun, but bun not found in PATH",
+              ))
+          }
+        }
+        custom_path -> {
+          // Config specifies a custom path
+          case simplifile.is_file(custom_path) {
+            Ok(True) -> {
+              io.println("🔍 Using custom bun path from gleam.toml: " <> custom_path)
+              Ok(custom_path)
+            }
+            Ok(False) | Error(_) ->
+              Error(snag.new(
+                "gleam.toml specifies bun path '"
+                <> custom_path
+                <> "', but file not found",
+              ))
+          }
+        }
+      }
+    Error(_) -> {
+      // No config, use auto-detection: system first, then bundled
+      case try_system_bun() {
+        Ok(path) -> {
+          io.println("🔍 Using system bun")
+          Ok(path)
+        }
+        Error(_) -> {
+          io.println("🔍 Using bundled bun from lustre_dev_tools")
+          get_bundled_bun_path()
+        }
+      }
+    }
+  }
+}
 
-  // Detect platform and architecture for bun path
+/// Reads the bun configuration from gleam.toml
+fn read_bun_config() -> SnagResult(String) {
+  let root = find_root(".")
+  let toml_path = filepath.join(root, "gleam.toml")
+
+  use content <- result.try(
+    simplifile.read(toml_path)
+    |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
+  )
+
+  use toml <- result.try(
+    tom.parse(content)
+    |> snag.map_error(fn(_) { "Could not parse gleam.toml" }),
+  )
+
+  // Try to read [tools.mascarpone.bin] bun setting
+  tom.get_string(toml, ["tools", "mascarpone", "bin", "bun"])
+  |> snag.map_error(fn(_) { "No bun configuration found in gleam.toml" })
+}
+
+/// Attempts to find bun in the system PATH
+fn try_system_bun() -> SnagResult(String) {
+  // Try to run `bun --version` to check if bun is available in PATH
+  case shellout.command(run: "bun", with: ["--version"], in: ".", opt: []) {
+    Ok(_) -> Ok("bun")
+    Error(_) -> Error(snag.new("System bun not found"))
+  }
+}
+
+/// Gets the path to the bundled bun executable
+fn get_bundled_bun_path() -> SnagResult(String) {
+  let root = find_root(".")
   use platform <- result.try(detect_platform())
   let arch = detect_architecture()
 
@@ -81,7 +163,7 @@ fn run_bundle_build() -> SnagResult(Nil) {
       ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
     )
 
-  // Check if bun exists
+  // Verify bundled bun exists
   use bun_exists <- result.try(
     simplifile.is_file(bun_path)
     |> snag.map_error(fn(error) {
@@ -94,19 +176,26 @@ fn run_bundle_build() -> SnagResult(Nil) {
       Error(snag.new(
         "Bun executable not found at "
         <> bun_path
-        <> ". Make sure lustre_dev_tools is properly installed.",
+        <> " and not found in system PATH. Make sure lustre_dev_tools is properly installed or install bun globally.",
       ))
-    True -> {
-      io.println("📦 Running bun run build...")
-
-      // Run bun run build
-      shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
-      |> snag.map_error(fn(error) {
-        "Failed to run bun build command: " <> error.1
-      })
-      |> result.replace(Nil)
-    }
+    True -> Ok(bun_path)
   }
+}
+
+fn run_bundle_build() -> SnagResult(Nil) {
+  let root = find_root(".")
+
+  // Locate bun (system or bundled)
+  use bun_path <- result.try(locate_bun())
+
+  io.println("📦 Running bun run build...")
+
+  // Run bun run build
+  shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
+  |> snag.map_error(fn(error) {
+    "Failed to run bun build command: " <> error.1
+  })
+  |> result.replace(Nil)
 }
 
 // Model types
@@ -1285,7 +1374,7 @@ type Architecture {
 
 fn detect_platform() -> SnagResult(Platform) {
   case operating_system.name() {
-    "nt" -> Ok(Windows)
+    "windowsnt" -> Ok(Windows)
     "darwin" -> Ok(MacOS)
     _ -> Ok(Linux)
   }
@@ -1318,105 +1407,47 @@ fn get_bun_arch_string(arch: Architecture) -> String {
 fn install_npm_packages() -> SnagResult(Nil) {
   let root = find_root(".")
 
-  // Detect platform and architecture for bun path
-  use platform <- result.try(detect_platform())
-  let arch = detect_architecture()
+  // Locate bun (system or bundled)
+  use bun_path <- result.try(locate_bun())
 
-  let platform_str = get_bun_platform_string(platform)
-  let arch_str = get_bun_arch_string(arch)
-
-  let bun_path =
-    filepath.join(
-      root,
-      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
+  // Run bun add to install packages
+  use _ <- result.try(
+    shellout.command(
+      run: bun_path,
+      with: ["add", "three@^0.180.0"],
+      in: root,
+      opt: [],
     )
-
-  // Check if bun exists
-  use bun_exists <- result.try(
-    simplifile.is_file(bun_path)
     |> snag.map_error(fn(error) {
-      "Could not check for bun executable: " <> simplifile.describe_error(error)
+      "Failed to install three.js 0.180.0: " <> error.1
     }),
   )
 
-  case bun_exists {
-    False ->
-      Error(snag.new(
-        "Bun executable not found at "
-        <> bun_path
-        <> ". Make sure lustre_dev_tools is properly installed.",
-      ))
-    True -> {
-      // Run bun add to install packages
-      use _ <- result.try(
-        shellout.command(
-          run: bun_path,
-          with: ["add", "three@^0.180.0"],
-          in: root,
-          opt: [],
-        )
-        |> snag.map_error(fn(error) {
-          "Failed to install three.js 0.180.0: " <> error.1
-        }),
-      )
-
-      shellout.command(
-        run: bun_path,
-        with: ["add", "@dimforge/rapier3d-compat@^0.11.2"],
-        in: root,
-        opt: [],
-      )
-      |> snag.map_error(fn(error) { "Failed to install Rapier3D: " <> error.1 })
-      |> result.replace(Nil)
-    }
-  }
+  shellout.command(
+    run: bun_path,
+    with: ["add", "@dimforge/rapier3d-compat@^0.11.2"],
+    in: root,
+    opt: [],
+  )
+  |> snag.map_error(fn(error) { "Failed to install Rapier3D: " <> error.1 })
+  |> result.replace(Nil)
 }
 
 fn install_nwbuilder() -> SnagResult(Nil) {
   let root = find_root(".")
 
-  // Detect platform and architecture for bun path
-  use platform <- result.try(detect_platform())
-  let arch = detect_architecture()
+  // Locate bun (system or bundled)
+  use bun_path <- result.try(locate_bun())
 
-  let platform_str = get_bun_platform_string(platform)
-  let arch_str = get_bun_arch_string(arch)
-
-  let bun_path =
-    filepath.join(
-      root,
-      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
-    )
-
-  // Check if bun exists
-  use bun_exists <- result.try(
-    simplifile.is_file(bun_path)
-    |> snag.map_error(fn(error) {
-      "Could not check for bun executable: " <> simplifile.describe_error(error)
-    }),
+  // Install nw-builder
+  shellout.command(
+    run: bun_path,
+    with: ["add", "--dev", "nw-builder@^4.16.0"],
+    in: root,
+    opt: [],
   )
-
-  case bun_exists {
-    False ->
-      Error(snag.new(
-        "Bun executable not found at "
-        <> bun_path
-        <> ". Make sure lustre_dev_tools is properly installed.",
-      ))
-    True -> {
-      // Install nw-builder
-      shellout.command(
-        run: bun_path,
-        with: ["add", "--dev", "nw-builder@^4.16.0"],
-        in: root,
-        opt: [],
-      )
-      |> snag.map_error(fn(error) {
-        "Failed to install nw-builder: " <> error.1
-      })
-      |> result.replace(Nil)
-    }
-  }
+  |> snag.map_error(fn(error) { "Failed to install nw-builder: " <> error.1 })
+  |> result.replace(Nil)
 }
 
 fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
