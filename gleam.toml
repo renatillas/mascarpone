@@ -1,5 +1,5 @@
 name = "mascarpone"
-version = "2.0.0"
+version = "2.1.0"
 target = "erlang"
 description = "CLI tool for scaffolding Tiramisu game projects"
 licences = ["MIT"]
@@ -16,6 +16,18 @@ tom = ">= 2.0.0 and < 3.0.0"
 operating_system = ">= 1.0.1 and < 2.0.0"
 shellout = ">= 1.7.0 and < 4.0.0"
 argv = ">= 1.0.2 and < 2.0.0"
+tiramisu = ">= 6.0.0 and < 7.0.0"
+vec = ">= 3.0.1 and < 4.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+lustre_dev_tools = ">= 2.2.3 and < 3.0.0"
+
+
+[tools.lustre.html]
+scripts = [
+  { type = "importmap", content = "{ \"imports\": { \"three\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js\", \"three/addons/\": \"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/\", \"@dimforge/rapier3d-compat\": \"https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.11.2/+esm\" } }" }
+]
+stylesheets = [
+  { content = "body { margin: 0; padding: 0; overflow: hidden; }" }
+]

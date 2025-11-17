@@ -91,7 +91,9 @@ fn locate_bun() -> SnagResult(String) {
           // Config specifies a custom path
           case simplifile.is_file(custom_path) {
             Ok(True) -> {
-              io.println("🔍 Using custom bun path from gleam.toml: " <> custom_path)
+              io.println(
+                "🔍 Using custom bun path from gleam.toml: " <> custom_path,
+              )
               Ok(custom_path)
             }
             Ok(False) | Error(_) ->
@@ -192,9 +194,7 @@ fn run_bundle_build() -> SnagResult(Nil) {
 
   // Run bun run build
   shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
-  |> snag.map_error(fn(error) {
-    "Failed to run bun build command: " <> error.1
-  })
+  |> snag.map_error(fn(error) { "Failed to run bun build command: " <> error.1 })
   |> result.replace(Nil)
 }
 
@@ -1037,9 +1037,9 @@ pub fn main() -> Nil {
   tiramisu.run(
     dimensions: option.None,
     background: background.Color(0x1a1a2e),
-    init: init,
-    update: update,
-    view: view,
+    init:,
+    update:,
+    view:,
   )
 }
 
@@ -1060,7 +1060,7 @@ fn update(
   }
 }
 
-fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String)) {
+fn view(model: Model, ctx: tiramisu.Context(String)) -> scene.Node(String) {
   let cam = camera.camera_2d(
     width: float.round(ctx.canvas_width),
     height: float.round(ctx.canvas_height),
@@ -1068,7 +1068,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
   let assert Ok(sprite_geom) = geometry.plane(width: 50.0, height: 50.0)
   let assert Ok(sprite_mat) = material.basic(color: 0xff0066, transparent: False, opacity: 1.0, map: option.None)
 
-  [
+  scene.empty(id: \"Scene\", transform: transform.identity, children: [
     scene.camera(
       id: \"camera\",
       camera: cam,
@@ -1076,6 +1076,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
       look_at: option.None,
       active: True,
       viewport: option.None,
+      postprocessing: option.None,
     ),
     scene.light(
       id: \"ambient\",
@@ -1094,7 +1095,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> List(scene.Node(String))
         |> transform.with_euler_rotation(vec3.Vec3(0.0, 0.0, model.time)),
       physics: option.None,
     ),
-  ]
+  ])
 }
 "
 }
@@ -1125,9 +1126,9 @@ pub fn main() -> Nil {
   tiramisu.run(
     dimensions: option.None,
     background: background.Color(0x1a1a2e),
-    init: init,
-    update: update,
-    view: view,
+    init:,
+    update:,
+    view:,
   )
 }
 
@@ -1148,14 +1149,14 @@ fn update(
   }
 }
 
-fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)) {
+fn view(_model: Model, _ctx: tiramisu.Context(String)) -> scene.Node(String) {
   let assert Ok(cam) = camera.perspective(field_of_view: 75.0, near: 0.1, far: 1000.0)
   let assert Ok(sphere_geom) = geometry.sphere(radius: 1.0, width_segments: 32, height_segments: 32)
   let assert Ok(sphere_mat) = material.new() |> material.with_color(0x0066ff) |> material.build
   let assert Ok(ground_geom) = geometry.plane(width: 20.0, height: 20.0)
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
-  [
+  scene.empty(id: \"Scene\", transform: transform.identity, children: [
     scene.camera(
       id: \"camera\",
       camera: cam,
@@ -1163,6 +1164,7 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
       look_at: option.Some(vec3.Vec3(0.0, 0.0, 0.0)),
       active: True,
       viewport: option.None,
+      postprocessing: option.None
     ),
     scene.light(
       id: \"ambient\",
@@ -1196,7 +1198,7 @@ fn view(model: Model, _ctx: tiramisu.Context(String)) -> List(scene.Node(String)
         |> transform.with_euler_rotation(vec3.Vec3(-1.57, 0.0, 0.0)),
       physics: option.None,
     ),
-  ]
+  ])
 }
 "
 }
@@ -1224,6 +1226,7 @@ pub type Id {
   Ground
   Cube1
   Cube2
+  Scene
 }
 
 pub type Model {
@@ -1238,9 +1241,9 @@ pub fn main() -> Nil {
   tiramisu.run(
     dimensions: option.None,
     background: background.Color(0x1a1a2e),
-    init: init,
-    update: update,
-    view: view,
+    init:,
+    update:,
+    view:,
   )
 }
 
@@ -1262,13 +1265,13 @@ fn update(
   let assert option.Some(physics_world) = ctx.physics_world
   case msg {
     Tick -> {
-      let new_physics_world = physics.step(physics_world)
+      let new_physics_world = physics.step(physics_world, ctx.delta_time)
       #(model, effect.tick(Tick), option.Some(new_physics_world))
     }
   }
 }
 
-fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
+fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
   let assert option.Some(physics_world) = ctx.physics_world
   let assert Ok(cam) = camera.perspective(field_of_view: 75.0, near: 0.1, far: 1000.0)
 
@@ -1279,7 +1282,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
   let assert Ok(ground_geom) = geometry.box(width: 20.0, height: 0.2, depth: 20.0)
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
-  [
+  scene.empty(id: Scene, transform: transform.identity, children: [
     scene.camera(
       id: Camera,
       camera: cam,
@@ -1287,6 +1290,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       look_at: option.Some(vec3.Vec3(0.0, 0.0, 0.0)),
       active: True,
       viewport: option.None,
+      postprocessing: option.None,
     ),
     scene.light(
       id: Ambient,
@@ -1353,7 +1357,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
         |> physics.build(),
       ),
     ),
-  ]
+  ])
 }
 "
 }

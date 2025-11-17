@@ -20,6 +20,7 @@ pub type Id {
   Ground
   Cube1
   Cube2
+  Scene
 }
 
 pub type Model {
@@ -34,9 +35,9 @@ pub fn main() -> Nil {
   tiramisu.run(
     dimensions: option.None,
     background: background.Color(0x1a1a2e),
-    init: init,
-    update: update,
-    view: view,
+    init:,
+    update:,
+    view:,
   )
 }
 
@@ -58,13 +59,13 @@ fn update(
   let assert option.Some(physics_world) = ctx.physics_world
   case msg {
     Tick -> {
-      let new_physics_world = physics.step(physics_world)
+      let new_physics_world = physics.step(physics_world, ctx.delta_time)
       #(model, effect.tick(Tick), option.Some(new_physics_world))
     }
   }
 }
 
-fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
+fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
   let assert option.Some(physics_world) = ctx.physics_world
   let assert Ok(cam) = camera.perspective(field_of_view: 75.0, near: 0.1, far: 1000.0)
 
@@ -75,7 +76,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
   let assert Ok(ground_geom) = geometry.box(width: 20.0, height: 0.2, depth: 20.0)
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
-  [
+  scene.empty(id: Scene, transform: transform.identity, children: [
     scene.camera(
       id: Camera,
       camera: cam,
@@ -83,6 +84,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
       look_at: option.Some(vec3.Vec3(0.0, 0.0, 0.0)),
       active: True,
       viewport: option.None,
+      postprocessing: option.None,
     ),
     scene.light(
       id: Ambient,
@@ -149,5 +151,5 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> List(scene.Node(Id)) {
         |> physics.build(),
       ),
     ),
-  ]
+  ])
 }
