@@ -1378,7 +1378,7 @@ type Architecture {
 
 fn detect_platform() -> SnagResult(Platform) {
   case operating_system.name() {
-    "windowsnt" -> Ok(Windows)
+    "windows_nt" -> Ok(Windows)
     "darwin" -> Ok(MacOS)
     _ -> Ok(Linux)
   }
