@@ -159,10 +159,14 @@ fn get_bundled_bun_path() -> SnagResult(String) {
   let platform_str = get_bun_platform_string(platform)
   let arch_str = get_bun_arch_string(arch)
 
+  let bun_exe = case platform {
+      Windows -> "bun.exe"
+      _ -> "bun"
+  }
   let bun_path =
     filepath.join(
       root,
-      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/bun",
+      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/" <> bun_exe,
     )
 
   // Verify bundled bun exists
@@ -1378,7 +1382,7 @@ type Architecture {
 
 fn detect_platform() -> SnagResult(Platform) {
   case operating_system.name() {
-    "windowsnt" -> Ok(Windows)
+    "windows_nt" -> Ok(Windows)
     "darwin" -> Ok(MacOS)
     _ -> Ok(Linux)
   }
