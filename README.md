@@ -50,6 +50,23 @@ Mascarpone sets up your Tiramisu project with:
 - ⚙️ Configurable options for Lustre UI and Rapier3D physics
 - ♻️ Can be run on existing projects to add NW.js support
 
+## Bun Configuration
+
+By default, Mascarpone will:
+1. First try to use bun from your system PATH
+2. If not found, download a bundled bun via lustre_dev_tools
+
+You can override this behavior in your `gleam.toml`:
+
+```toml
+[tools.lustre.bin]
+bun = "system"  # Force using system bun (will error if not found)
+# OR
+bun = "/path/to/custom/bun"  # Use specific bun executable
+```
+
+When a custom bun path is configured, Mascarpone will skip downloading bun entirely.
+
 ## After Creation
 
 ### For Web Development

@@ -16,8 +16,88 @@ import simplifile
 import snag.{type Result as SnagResult}
 import tom
 
+// ============================================================================
+// TYPES & DATA STRUCTURES
+// ============================================================================
+
+type Platform {
+  Linux
+  MacOS
+  Windows
+}
+
+type Architecture {
+  X64
+  Arm64
+  Aarch64
+}
+
+type Step {
+  Welcome
+  LustreChoice
+  TemplateChoice
+  DesktopBundleChoice
+  Generating(List(GenerationStep))
+  Complete
+  Failed(String)
+}
+
+type GenerationStep {
+  StepPending(String)
+  StepInProgress(String)
+  StepComplete(String)
+  StepFailed(String, String)
+}
+
+type Template {
+  TwoDGame
+  ThreeDGame
+  PhysicsDemo
+}
+
+type Model {
+  Model(
+    step: Step,
+    project_name: String,
+    include_lustre: Bool,
+    include_physics: Bool,
+    template: option.Option(Template),
+    bundle_desktop: Bool,
+    info_messages: List(String),
+  )
+}
+
+type Msg {
+  NextStep
+  SetLustre(Bool)
+  SetTemplate(Template)
+  SkipTemplate
+  SetDesktopBundle(Bool)
+  StartGeneration
+  InstallLustreDevTools
+  UpdateGleamToml
+  InstallNpmPackages
+  CreateGitignore
+  CreateMainFile
+  InstallNwBuilder
+  SetupDesktopBundle
+  GenerationComplete
+  GenerationFailed(String)
+  AddInfoMessage(String)
+}
+
+type StepStatus {
+  StatusPending
+  StatusInProgress
+  StatusComplete
+  StatusFailed(String)
+}
+
+// ============================================================================
+// MAIN ENTRY POINTS
+// ============================================================================
+
 pub fn main() {
-  // Check command-line arguments for bundle command
   case argv.load().arguments {
     ["bundle"] -> handle_bundle_command()
     _ -> run_interactive_mode()
@@ -65,198 +145,9 @@ fn handle_bundle_command() -> Nil {
   }
 }
 
-/// Locates the bun executable based on configuration priority:
-/// 1. gleam.toml [tools.mascarpone.bin] configuration
-/// 2. System bun in PATH
-/// 3. Bundled bun from lustre_dev_tools
-fn locate_bun() -> SnagResult(String) {
-  // First check gleam.toml configuration
-  case read_bun_config() {
-    Ok(config) ->
-      case config {
-        "system" -> {
-          // Config says use system bun
-          case try_system_bun() {
-            Ok(path) -> {
-              io.println("🔍 Using system bun (configured in gleam.toml)")
-              Ok(path)
-            }
-            Error(_) ->
-              Error(snag.new(
-                "gleam.toml specifies 'system' bun, but bun not found in PATH",
-              ))
-          }
-        }
-        custom_path -> {
-          // Config specifies a custom path
-          case simplifile.is_file(custom_path) {
-            Ok(True) -> {
-              io.println(
-                "🔍 Using custom bun path from gleam.toml: " <> custom_path,
-              )
-              Ok(custom_path)
-            }
-            Ok(False) | Error(_) ->
-              Error(snag.new(
-                "gleam.toml specifies bun path '"
-                <> custom_path
-                <> "', but file not found",
-              ))
-          }
-        }
-      }
-    Error(_) -> {
-      // No config, use auto-detection: system first, then bundled
-      case try_system_bun() {
-        Ok(path) -> {
-          io.println("🔍 Using system bun")
-          Ok(path)
-        }
-        Error(_) -> {
-          io.println("🔍 Using bundled bun from lustre_dev_tools")
-          get_bundled_bun_path()
-        }
-      }
-    }
-  }
-}
-
-/// Reads the bun configuration from gleam.toml
-fn read_bun_config() -> SnagResult(String) {
-  let root = find_root(".")
-  let toml_path = filepath.join(root, "gleam.toml")
-
-  use content <- result.try(
-    simplifile.read(toml_path)
-    |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
-  )
-
-  use toml <- result.try(
-    tom.parse(content)
-    |> snag.map_error(fn(_) { "Could not parse gleam.toml" }),
-  )
-
-  // Try to read [tools.mascarpone.bin] bun setting
-  tom.get_string(toml, ["tools", "mascarpone", "bin", "bun"])
-  |> snag.map_error(fn(_) { "No bun configuration found in gleam.toml" })
-}
-
-/// Attempts to find bun in the system PATH
-fn try_system_bun() -> SnagResult(String) {
-  // Try to run `bun --version` to check if bun is available in PATH
-  case shellout.command(run: "bun", with: ["--version"], in: ".", opt: []) {
-    Ok(_) -> Ok("bun")
-    Error(_) -> Error(snag.new("System bun not found"))
-  }
-}
-
-/// Gets the path to the bundled bun executable
-fn get_bundled_bun_path() -> SnagResult(String) {
-  let root = find_root(".")
-  use platform <- result.try(detect_platform())
-  let arch = detect_architecture()
-
-  let platform_str = get_bun_platform_string(platform)
-  let arch_str = get_bun_arch_string(arch)
-
-  let bun_exe = case platform {
-      Windows -> "bun.exe"
-      _ -> "bun"
-  }
-  let bun_path =
-    filepath.join(
-      root,
-      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/" <> bun_exe,
-    )
-
-  // Verify bundled bun exists
-  use bun_exists <- result.try(
-    simplifile.is_file(bun_path)
-    |> snag.map_error(fn(error) {
-      "Could not check for bun executable: " <> simplifile.describe_error(error)
-    }),
-  )
-
-  case bun_exists {
-    False ->
-      Error(snag.new(
-        "Bun executable not found at "
-        <> bun_path
-        <> " and not found in system PATH. Make sure lustre_dev_tools is properly installed or install bun globally.",
-      ))
-    True -> Ok(bun_path)
-  }
-}
-
-fn run_bundle_build() -> SnagResult(Nil) {
-  let root = find_root(".")
-
-  // Locate bun (system or bundled)
-  use bun_path <- result.try(locate_bun())
-
-  io.println("📦 Running bun run build...")
-
-  // Run bun run build
-  shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
-  |> snag.map_error(fn(error) { "Failed to run bun build command: " <> error.1 })
-  |> result.replace(Nil)
-}
-
-// Model types
-
-type Step {
-  Welcome
-  LustreChoice
-  TemplateChoice
-  DesktopBundleChoice
-  Generating(List(GenerationStep))
-  Complete
-  Failed(String)
-}
-
-type GenerationStep {
-  StepPending(String)
-  StepInProgress(String)
-  StepComplete(String)
-  StepFailed(String, String)
-}
-
-type Template {
-  TwoDGame
-  ThreeDGame
-  PhysicsDemo
-}
-
-type Model {
-  Model(
-    step: Step,
-    project_name: String,
-    include_lustre: Bool,
-    include_physics: Bool,
-    template: option.Option(Template),
-    bundle_desktop: Bool,
-  )
-}
-
-type Msg {
-  NextStep
-  SetLustre(Bool)
-  SetTemplate(Template)
-  SkipTemplate
-  SetDesktopBundle(Bool)
-  StartGeneration
-  InstallLustreDevTools
-  UpdateGleamToml
-  InstallNpmPackages
-  CreateGitignore
-  CreateMainFile
-  InstallNwBuilder
-  SetupDesktopBundle
-  GenerationComplete
-  GenerationFailed(String)
-}
-
-// Shore Application
+// ============================================================================
+// SHORE APPLICATION (INIT, UPDATE, VIEW)
+// ============================================================================
 
 fn init(project_name: String) -> #(Model, List(fn() -> Msg)) {
   #(
@@ -267,6 +158,7 @@ fn init(project_name: String) -> #(Model, List(fn() -> Msg)) {
       include_physics: False,
       template: None,
       bundle_desktop: False,
+      info_messages: [],
     ),
     [],
   )
@@ -318,14 +210,21 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
           StatusInProgress,
         )
       case install_lustre_dev_tools() {
-        Ok(_) -> #(
-          update_step_status(
-            updated_model,
-            "Installing Lustre dev tools",
-            StatusComplete,
-          ),
-          [fn() { InstallNpmPackages }],
-        )
+        Ok(messages) -> {
+          let model_with_messages =
+            Model(
+              ..updated_model,
+              info_messages: list.append(updated_model.info_messages, messages),
+            )
+          #(
+            update_step_status(
+              model_with_messages,
+              "Installing Lustre dev tools",
+              StatusComplete,
+            ),
+            [fn() { InstallNpmPackages }],
+          )
+        }
         Error(err) -> #(
           update_step_status(
             updated_model,
@@ -368,14 +267,21 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
           StatusInProgress,
         )
       case install_npm_packages() {
-        Ok(_) -> #(
-          update_step_status(
-            updated_model,
-            "Installing Three.js and Rapier3D",
-            StatusComplete,
-          ),
-          [fn() { CreateGitignore }],
-        )
+        Ok(messages) -> {
+          let model_with_messages =
+            Model(
+              ..updated_model,
+              info_messages: list.append(updated_model.info_messages, messages),
+            )
+          #(
+            update_step_status(
+              model_with_messages,
+              "Installing Three.js and Rapier3D",
+              StatusComplete,
+            ),
+            [fn() { CreateGitignore }],
+          )
+        }
         Error(err) -> #(
           update_step_status(
             updated_model,
@@ -464,14 +370,21 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
       let updated_model =
         update_step_status(model, "Installing nw-builder", StatusInProgress)
       case install_nwbuilder() {
-        Ok(_) -> #(
-          update_step_status(
-            updated_model,
-            "Installing nw-builder",
-            StatusComplete,
-          ),
-          [fn() { SetupDesktopBundle }],
-        )
+        Ok(messages) -> {
+          let model_with_messages =
+            Model(
+              ..updated_model,
+              info_messages: list.append(updated_model.info_messages, messages),
+            )
+          #(
+            update_step_status(
+              model_with_messages,
+              "Installing nw-builder",
+              StatusComplete,
+            ),
+            [fn() { SetupDesktopBundle }],
+          )
+        }
         Error(err) -> #(
           update_step_status(
             updated_model,
@@ -509,69 +422,11 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
     GenerationComplete -> #(Model(..model, step: Complete), [])
 
     GenerationFailed(err) -> #(Model(..model, step: Failed(err)), [])
-  }
-}
 
-type StepStatus {
-  StatusPending
-  StatusInProgress
-  StatusComplete
-  StatusFailed(String)
-}
-
-fn generate_steps_list(model: Model) -> List(GenerationStep) {
-  let base_steps = [
-    StepPending("Installing Lustre dev tools"),
-    StepPending("Updating gleam.toml"),
-    StepPending("Installing Three.js and Rapier3D"),
-    StepPending("Creating .gitignore"),
-    StepPending("Creating index.html"),
-  ]
-
-  let with_template = case model.template {
-    Some(_) -> list.append(base_steps, [StepPending("Creating main game file")])
-    None -> base_steps
-  }
-
-  case model.bundle_desktop {
-    True ->
-      list.append(with_template, [
-        StepPending("Installing nw-builder"),
-        StepPending("Setting up desktop bundle"),
-      ])
-    False -> with_template
-  }
-}
-
-fn update_step_status(
-  model: Model,
-  step_name: String,
-  status: StepStatus,
-) -> Model {
-  case model.step {
-    Generating(steps) -> {
-      let updated_steps =
-        list.map(steps, fn(step) {
-          case step {
-            StepPending(name) if name == step_name ->
-              case status {
-                StatusInProgress -> StepInProgress(name)
-                StatusComplete -> StepComplete(name)
-                StatusFailed(err) -> StepFailed(name, err)
-                StatusPending -> step
-              }
-            StepInProgress(name) if name == step_name ->
-              case status {
-                StatusComplete -> StepComplete(name)
-                StatusFailed(err) -> StepFailed(name, err)
-                _ -> step
-              }
-            _ -> step
-          }
-        })
-      Model(..model, step: Generating(updated_steps))
-    }
-    _ -> model
+    AddInfoMessage(msg) -> #(
+      Model(..model, info_messages: list.append(model.info_messages, [msg])),
+      [],
+    )
   }
 }
 
@@ -581,13 +436,15 @@ fn view(model: Model) -> shore.Node(Msg) {
     LustreChoice -> view_lustre_choice()
     TemplateChoice -> view_template_choice()
     DesktopBundleChoice -> view_desktop_bundle_choice()
-    Generating(steps) -> view_generating(steps)
+    Generating(steps) -> view_generating(steps, model.info_messages)
     Complete -> view_complete(model)
     Failed(msg) -> view_error(msg)
   }
 }
 
-// Views
+// ============================================================================
+// VIEW FUNCTIONS
+// ============================================================================
 
 fn view_welcome() -> shore.Node(Msg) {
   ui.col([
@@ -704,7 +561,10 @@ fn view_desktop_bundle_choice() -> shore.Node(Msg) {
   ])
 }
 
-fn view_generating(steps: List(GenerationStep)) -> shore.Node(Msg) {
+fn view_generating(
+  steps: List(GenerationStep),
+  info_messages: List(String),
+) -> shore.Node(Msg) {
   let header = [
     ui.text_styled(
       "╔═══════════════════════════════════╗",
@@ -738,7 +598,18 @@ fn view_generating(steps: List(GenerationStep)) -> shore.Node(Msg) {
       }
     })
 
-  ui.col(list.append(header, step_views))
+  let info_views = case info_messages {
+    [] -> []
+    messages -> {
+      let msg_views =
+        list.map(messages, fn(msg) {
+          ui.text_styled("    " <> msg, Some(style.Cyan), None)
+        })
+      list.append([ui.text("")], msg_views)
+    }
+  }
+
+  ui.col(list.flatten([header, step_views, info_views]))
 }
 
 fn view_complete(model: Model) -> shore.Node(Msg) {
@@ -783,7 +654,11 @@ fn view_complete(model: Model) -> shore.Node(Msg) {
   let next_steps = case model.bundle_desktop {
     True -> [
       ui.text("1. Build platform distributions:"),
-      ui.text_styled("   bun run build", Some(style.Cyan), None),
+      ui.text_styled(
+        "   gleam run -m mascarpone bundle",
+        Some(style.Cyan),
+        None,
+      ),
       ui.text(""),
       ui.text(
         "2. Find your builds in ./" <> model.project_name <> "_desktop_bundle/:",
@@ -828,60 +703,139 @@ fn view_error(msg: String) -> shore.Node(Msg) {
   ])
 }
 
-fn template_name(template: Template) -> String {
-  case template {
-    TwoDGame -> "2D Game"
-    ThreeDGame -> "3D Game"
-    PhysicsDemo -> "Physics Demo"
+// ============================================================================
+// BUSINESS LOGIC (INSTALLATION & GENERATION)
+// ============================================================================
+
+fn generate_steps_list(model: Model) -> List(GenerationStep) {
+  let base_steps = [
+    StepPending("Installing Lustre dev tools"),
+    StepPending("Updating gleam.toml"),
+    StepPending("Installing Three.js and Rapier3D"),
+    StepPending("Creating .gitignore"),
+    StepPending("Creating index.html"),
+  ]
+
+  let with_template = case model.template {
+    Some(_) -> list.append(base_steps, [StepPending("Creating main game file")])
+    None -> base_steps
+  }
+
+  case model.bundle_desktop {
+    True ->
+      list.append(with_template, [
+        StepPending("Installing nw-builder"),
+        StepPending("Setting up desktop bundle"),
+      ])
+    False -> with_template
   }
 }
 
-// Utility functions
+fn update_step_status(
+  model: Model,
+  step_name: String,
+  status: StepStatus,
+) -> Model {
+  case model.step {
+    Generating(steps) -> {
+      let updated_steps =
+        list.map(steps, fn(step) {
+          case step {
+            StepPending(name) if name == step_name ->
+              case status {
+                StatusInProgress -> StepInProgress(name)
+                StatusComplete -> StepComplete(name)
+                StatusFailed(err) -> StepFailed(name, err)
+                StatusPending -> step
+              }
+            StepInProgress(name) if name == step_name ->
+              case status {
+                StatusComplete -> StepComplete(name)
+                StatusFailed(err) -> StepFailed(name, err)
+                _ -> step
+              }
+            _ -> step
+          }
+        })
+      Model(..model, step: Generating(updated_steps))
+    }
+    _ -> model
+  }
+}
 
-fn install_lustre_dev_tools() -> SnagResult(Nil) {
+fn install_lustre_dev_tools() -> SnagResult(List(String)) {
   let root = find_root(".")
 
+  // Check if bun is already configured - if so, skip downloading
+  case read_bun_config() {
+    Ok(_) -> {
+      // Bun is configured, skip downloading
+      Ok(["ℹ️  Skipping bun download (already configured in gleam.toml)"])
+    }
+    Error(_) -> {
+      // No bun configured, download it via lustre/dev
+      shellout.command(
+        run: "gleam",
+        with: ["run", "-m", "lustre/dev", "add", "bun"],
+        in: root,
+        opt: [],
+      )
+      |> result.map_error(fn(error) {
+        snag.new("Failed to install Lustre dev tools: " <> error.1)
+      })
+      |> result.replace([])
+    }
+  }
+}
+
+fn install_npm_packages() -> SnagResult(List(String)) {
+  let root = find_root(".")
+  use #(bun_path, bun_msg) <- result.try(locate_bun())
+
+  let messages = case bun_msg {
+    Some(msg) -> [msg]
+    None -> []
+  }
+
+  use _ <- result.try(
+    shellout.command(
+      run: bun_path,
+      with: ["add", "three@^0.180.0"],
+      in: root,
+      opt: [],
+    )
+    |> snag.map_error(fn(error) {
+      "Failed to install three.js 0.180.0: " <> error.1
+    }),
+  )
+
   shellout.command(
-    run: "gleam",
-    with: ["run", "-m", "lustre/dev", "add", "bun"],
+    run: bun_path,
+    with: ["add", "@dimforge/rapier3d-compat@^0.11.2"],
     in: root,
     opt: [],
   )
-  |> result.map_error(fn(error) {
-    snag.new("Failed to install Lustre dev tools: " <> error.1)
-  })
-  |> result.replace(Nil)
+  |> snag.map_error(fn(error) { "Failed to install Rapier3D: " <> error.1 })
+  |> result.replace(messages)
 }
 
-fn get_project_name() -> SnagResult(String) {
+fn install_nwbuilder() -> SnagResult(List(String)) {
   let root = find_root(".")
-  let toml_path = filepath.join(root, "gleam.toml")
+  use #(bun_path, bun_msg) <- result.try(locate_bun())
 
-  use content <- result.try(
-    simplifile.read(toml_path)
-    |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
-  )
-
-  use toml <- result.try(
-    tom.parse(content)
-    |> snag.map_error(fn(_) { "Could not parse gleam.toml" }),
-  )
-
-  use name <- result.try(
-    tom.get_string(toml, ["name"])
-    |> snag.map_error(fn(_) { "Could not find project name in gleam.toml" }),
-  )
-
-  Ok(name)
-}
-
-fn find_root(path: String) -> String {
-  let toml = filepath.join(path, "gleam.toml")
-
-  case simplifile.is_file(toml) {
-    Ok(False) | Error(_) -> find_root(filepath.join(path, ".."))
-    Ok(True) -> path
+  let messages = case bun_msg {
+    Some(msg) -> [msg]
+    None -> []
   }
+
+  shellout.command(
+    run: bun_path,
+    with: ["add", "--dev", "nw-builder@^4.16.0"],
+    in: root,
+    opt: [],
+  )
+  |> snag.map_error(fn(error) { "Failed to install nw-builder: " <> error.1 })
+  |> result.replace(messages)
 }
 
 fn update_gleam_toml(
@@ -891,32 +845,26 @@ fn update_gleam_toml(
   let root = find_root(".")
   let toml_path = filepath.join(root, "gleam.toml")
 
-  // Read existing gleam.toml
   use content <- result.try(
     simplifile.read(toml_path)
     |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
   )
 
-  // Add target = "javascript" if not present
   let content = case string.contains(content, "target =") {
     True -> content
-    False -> {
-      // Add after name line
+    False ->
       string.replace(
         content,
         "name = \"" <> project_name <> "\"",
         "name = \"" <> project_name <> "\"\ntarget = \"javascript\"",
       )
-    }
   }
 
-  // Write back the updated target
   use _ <- result.try(
     simplifile.write(toml_path, content)
     |> snag.map_error(fn(_) { "Could not write gleam.toml" }),
   )
 
-  // Add dependencies using gleam add
   use _ <- result.try(
     shellout.command(run: "gleam", with: ["add", "tiramisu"], in: root, opt: [])
     |> snag.map_error(fn(error) {
@@ -941,7 +889,6 @@ fn update_gleam_toml(
     }),
   )
 
-  // Add lustre if requested
   use _ <- result.try(case include_lustre {
     True ->
       shellout.command(run: "gleam", with: ["add", "lustre"], in: root, opt: [])
@@ -951,13 +898,11 @@ fn update_gleam_toml(
     False -> Ok("")
   })
 
-  // Read the updated gleam.toml to add lustre HTML config
   use content <- result.try(
     simplifile.read(toml_path)
     |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
   )
 
-  // Add lustre HTML config if not already present
   let lustre_config =
     "\n\n[tools.lustre.html]
 scripts = [
@@ -1012,7 +957,265 @@ fn create_main_file(project_name: String, template: Template) -> SnagResult(Nil)
   |> snag.map_error(fn(_) { "Could not write main file" })
 }
 
-// Template generators
+fn setup_desktop_bundle(project_name: String) -> SnagResult(Nil) {
+  let root = find_root(".")
+  let package_json_path = filepath.join(root, "package.json")
+  let package_json_content = create_package_json(project_name, True)
+
+  simplifile.write(package_json_path, package_json_content)
+  |> snag.map_error(fn(_) { "Could not write package.json" })
+}
+
+fn run_bundle_build() -> SnagResult(Nil) {
+  let root = find_root(".")
+  use #(bun_path, bun_msg) <- result.try(locate_bun())
+
+  // Print bun location message for bundle command (not in TUI)
+  case bun_msg {
+    Some(msg) -> io.println(msg)
+    None -> Nil
+  }
+
+  io.println("📦 Running bun run build...")
+
+  shellout.command(run: bun_path, with: ["run", "build"], in: root, opt: [])
+  |> snag.map_error(fn(error) { "Failed to run bun build command: " <> error.1 })
+  |> result.replace(Nil)
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+fn template_name(template: Template) -> String {
+  case template {
+    TwoDGame -> "2D Game"
+    ThreeDGame -> "3D Game"
+    PhysicsDemo -> "Physics Demo"
+  }
+}
+
+fn get_project_name() -> SnagResult(String) {
+  let root = find_root(".")
+  let toml_path = filepath.join(root, "gleam.toml")
+
+  use content <- result.try(
+    simplifile.read(toml_path)
+    |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
+  )
+
+  use toml <- result.try(
+    tom.parse(content)
+    |> snag.map_error(fn(_) { "Could not parse gleam.toml" }),
+  )
+
+  use name <- result.try(
+    tom.get_string(toml, ["name"])
+    |> snag.map_error(fn(_) { "Could not find project name in gleam.toml" }),
+  )
+
+  Ok(name)
+}
+
+fn find_root(path: String) -> String {
+  let toml = filepath.join(path, "gleam.toml")
+
+  case simplifile.is_file(toml) {
+    Ok(False) | Error(_) -> find_root(filepath.join(path, ".."))
+    Ok(True) -> path
+  }
+}
+
+fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
+  let nwjs_config = case with_nwjs {
+    True -> ",
+  \"main\": \"index.html\",
+  \"window\": {
+    \"title\": \"" <> project_name <> "\",
+    \"width\": 1920,
+    \"height\": 1080,
+    \"nodejs\": true
+  },
+  \"scripts\": {
+    \"build\": \"gleam run -m lustre/dev build && cp package.json dist/ && nwbuild --glob=false dist\"
+  },
+  \"nwbuild\": {
+    \"flavor\": \"sdk\",
+    \"srcDir\": \"dist\",
+    \"mode\": \"build\",
+    \"glob\": false,
+    \"logLevel\": \"info\",
+    \"app\": {
+      \"icon\": \"\",
+      \"LSApplicationCategoryType\": \"public.app-category.games\",
+      \"NSHumanReadableCopyright\": \"Copyright © 2025\",
+      \"NSLocalNetworkUsageDescription\": \"This application uses the local network.\"
+    },
+    \"outDir\": \"./" <> project_name <> "_desktop_bundle\",
+    \"macCategory\": \"public.app-category.games\",
+    \"cacheDir\": \"./node_modules/nw\"
+  },
+  \"devDependencies\": {
+    \"nw-builder\": \"^4.16.0\"
+  },
+  \"node-remote\": [\"https://cdn.jsdelivr.net/*\"]"
+    False -> ""
+  }
+
+  "{
+  \"name\": \"" <> project_name <> "\",
+  \"version\": \"1.0.0\"" <> nwjs_config <> ",
+  \"dependencies\": {
+    \"three\": \"^0.180.0\",
+    \"@dimforge/rapier3d-compat\": \"^0.11.2\"
+  }
+}"
+}
+
+// ============================================================================
+// BUN LOCATION & PLATFORM DETECTION
+// ============================================================================
+
+/// Locates the bun executable based on configuration priority:
+/// 1. gleam.toml [tools.lustre.bin.bun] configuration
+/// 2. System bun in PATH
+/// 3. Bundled bun from lustre_dev_tools
+/// Returns tuple of (path, optional_message)
+fn locate_bun() -> SnagResult(#(String, option.Option(String))) {
+  case read_bun_config() {
+    Ok(config) ->
+      case config {
+        "system" ->
+          case try_system_bun() {
+            Ok(path) ->
+              Ok(#(path, Some("🔍 Using system bun (configured in gleam.toml)")))
+            Error(_) ->
+              Error(snag.new(
+                "gleam.toml specifies 'system' bun, but bun not found in PATH",
+              ))
+          }
+        custom_path ->
+          case simplifile.is_file(custom_path) {
+            Ok(True) ->
+              Ok(#(
+                custom_path,
+                Some("🔍 Using custom bun path from gleam.toml: " <> custom_path),
+              ))
+            Ok(False) | Error(_) ->
+              Error(snag.new(
+                "gleam.toml specifies bun path '"
+                <> custom_path
+                <> "', but file not found",
+              ))
+          }
+      }
+    Error(_) ->
+      case try_system_bun() {
+        Ok(path) -> Ok(#(path, Some("🔍 Using system bun")))
+        Error(_) -> {
+          use path <- result.try(get_bundled_bun_path())
+          Ok(#(path, Some("🔍 Using bundled bun from lustre_dev_tools")))
+        }
+      }
+  }
+}
+
+fn read_bun_config() -> SnagResult(String) {
+  let root = find_root(".")
+  let toml_path = filepath.join(root, "gleam.toml")
+
+  use content <- result.try(
+    simplifile.read(toml_path)
+    |> snag.map_error(fn(_) { "Could not read gleam.toml" }),
+  )
+
+  use toml <- result.try(
+    tom.parse(content)
+    |> snag.map_error(fn(_) { "Could not parse gleam.toml" }),
+  )
+
+  tom.get_string(toml, ["tools", "lustre", "bin", "bun"])
+  |> snag.map_error(fn(_) { "No bun configuration found in gleam.toml" })
+}
+
+fn try_system_bun() -> SnagResult(String) {
+  case shellout.command(run: "bun", with: ["--version"], in: ".", opt: []) {
+    Ok(_) -> Ok("bun")
+    Error(_) -> Error(snag.new("System bun not found"))
+  }
+}
+
+fn get_bundled_bun_path() -> SnagResult(String) {
+  let root = find_root(".")
+  use platform <- result.try(detect_platform())
+  let arch = detect_architecture()
+
+  let platform_str = get_bun_platform_string(platform)
+  let arch_str = get_bun_arch_string(arch)
+
+  let bun_exe = case platform {
+    Windows -> "bun.exe"
+    _ -> "bun"
+  }
+
+  let bun_path =
+    filepath.join(
+      root,
+      ".lustre/bin/bun-" <> platform_str <> "-" <> arch_str <> "/" <> bun_exe,
+    )
+
+  use bun_exists <- result.try(
+    simplifile.is_file(bun_path)
+    |> snag.map_error(fn(error) {
+      "Could not check for bun executable: " <> simplifile.describe_error(error)
+    }),
+  )
+
+  case bun_exists {
+    False ->
+      Error(snag.new(
+        "Bun executable not found at "
+        <> bun_path
+        <> " and not found in system PATH. Make sure lustre_dev_tools is properly installed or install bun globally.",
+      ))
+    True -> Ok(bun_path)
+  }
+}
+
+fn detect_platform() -> SnagResult(Platform) {
+  case operating_system.name() {
+    "windows_nt" -> Ok(Windows)
+    "darwin" -> Ok(MacOS)
+    _ -> Ok(Linux)
+  }
+}
+
+fn detect_architecture() -> Architecture {
+  case operating_system.name() {
+    "darwin" -> Aarch64
+    _ -> X64
+  }
+}
+
+fn get_bun_platform_string(platform: Platform) -> String {
+  case platform {
+    Linux -> "linux"
+    MacOS -> "darwin"
+    Windows -> "windows"
+  }
+}
+
+fn get_bun_arch_string(arch: Architecture) -> String {
+  case arch {
+    X64 -> "x64"
+    Arm64 -> "arm64"
+    Aarch64 -> "aarch64"
+  }
+}
+
+// ============================================================================
+// TEMPLATE GENERATORS
+// ============================================================================
 
 fn generate_2d_template() -> String {
   "/// 2D Game Example - Orthographic Camera
@@ -1364,152 +1567,4 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
   ])
 }
 "
-}
-
-// Desktop bundling functions
-
-type Platform {
-  Linux
-  MacOS
-  Windows
-}
-
-type Architecture {
-  X64
-  Arm64
-  Aarch64
-}
-
-fn detect_platform() -> SnagResult(Platform) {
-  case operating_system.name() {
-    "windows_nt" -> Ok(Windows)
-    "darwin" -> Ok(MacOS)
-    _ -> Ok(Linux)
-  }
-}
-
-fn detect_architecture() -> Architecture {
-  // Default to aarch64 on macOS (Apple Silicon), x64 elsewhere
-  case operating_system.name() {
-    "darwin" -> Aarch64
-    _ -> X64
-  }
-}
-
-fn get_bun_platform_string(platform: Platform) -> String {
-  case platform {
-    Linux -> "linux"
-    MacOS -> "darwin"
-    Windows -> "windows"
-  }
-}
-
-fn get_bun_arch_string(arch: Architecture) -> String {
-  case arch {
-    X64 -> "x64"
-    Arm64 -> "arm64"
-    Aarch64 -> "aarch64"
-  }
-}
-
-fn install_npm_packages() -> SnagResult(Nil) {
-  let root = find_root(".")
-
-  // Locate bun (system or bundled)
-  use bun_path <- result.try(locate_bun())
-
-  // Run bun add to install packages
-  use _ <- result.try(
-    shellout.command(
-      run: bun_path,
-      with: ["add", "three@^0.180.0"],
-      in: root,
-      opt: [],
-    )
-    |> snag.map_error(fn(error) {
-      "Failed to install three.js 0.180.0: " <> error.1
-    }),
-  )
-
-  shellout.command(
-    run: bun_path,
-    with: ["add", "@dimforge/rapier3d-compat@^0.11.2"],
-    in: root,
-    opt: [],
-  )
-  |> snag.map_error(fn(error) { "Failed to install Rapier3D: " <> error.1 })
-  |> result.replace(Nil)
-}
-
-fn install_nwbuilder() -> SnagResult(Nil) {
-  let root = find_root(".")
-
-  // Locate bun (system or bundled)
-  use bun_path <- result.try(locate_bun())
-
-  // Install nw-builder
-  shellout.command(
-    run: bun_path,
-    with: ["add", "--dev", "nw-builder@^4.16.0"],
-    in: root,
-    opt: [],
-  )
-  |> snag.map_error(fn(error) { "Failed to install nw-builder: " <> error.1 })
-  |> result.replace(Nil)
-}
-
-fn create_package_json(project_name: String, with_nwjs: Bool) -> String {
-  let nwjs_config = case with_nwjs {
-    True -> ",
-  \"main\": \"index.html\",
-  \"window\": {
-    \"title\": \"" <> project_name <> "\",
-    \"width\": 1920,
-    \"height\": 1080,
-    \"nodejs\": true
-  },
-  \"scripts\": {
-    \"build\": \"gleam run -m lustre/dev build && cp package.json dist/ && nwbuild --glob=false dist\"
-  },
-  \"nwbuild\": {
-    \"flavor\": \"sdk\",
-    \"srcDir\": \"dist\",
-    \"mode\": \"build\",
-    \"glob\": false,
-    \"logLevel\": \"info\",
-    \"app\": {
-      \"icon\": \"\",
-      \"LSApplicationCategoryType\": \"public.app-category.games\",
-      \"NSHumanReadableCopyright\": \"Copyright © 2025\",
-      \"NSLocalNetworkUsageDescription\": \"This application uses the local network.\"
-    },
-    \"outDir\": \"./" <> project_name <> "_desktop_bundle\",
-    \"macCategory\": \"public.app-category.games\",
-    \"cacheDir\": \"./node_modules/nw\"
-  },
-  \"devDependencies\": {
-    \"nw-builder\": \"^4.16.0\"
-  },
-  \"node-remote\": [\"https://cdn.jsdelivr.net/*\"]"
-    False -> ""
-  }
-
-  "{
-  \"name\": \"" <> project_name <> "\",
-  \"version\": \"1.0.0\"" <> nwjs_config <> ",
-  \"dependencies\": {
-    \"three\": \"^0.180.0\",
-    \"@dimforge/rapier3d-compat\": \"^0.11.2\"
-  }
-}"
-}
-
-fn setup_desktop_bundle(project_name: String) -> SnagResult(Nil) {
-  let root = find_root(".")
-
-  // Create package.json with NW.js configuration
-  let package_json_path = filepath.join(root, "package.json")
-  let package_json_content = create_package_json(project_name, True)
-  simplifile.write(package_json_path, package_json_content)
-  |> snag.map_error(fn(_) { "Could not write package.json" })
 }
