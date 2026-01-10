@@ -60,7 +60,6 @@ type Model {
     step: Step,
     project_name: String,
     include_lustre: Bool,
-    include_physics: Bool,
     template: option.Option(Template),
     bundle_desktop: Bool,
     info_messages: List(String),
@@ -83,7 +82,6 @@ type Msg {
   SetupDesktopBundle
   GenerationComplete
   GenerationFailed(String)
-  AddInfoMessage(String)
 }
 
 type StepStatus {
@@ -155,7 +153,6 @@ fn init(project_name: String) -> #(Model, List(fn() -> Msg)) {
       step: Welcome,
       project_name: project_name,
       include_lustre: True,
-      include_physics: False,
       template: None,
       bundle_desktop: False,
       info_messages: [],
@@ -422,11 +419,6 @@ fn update(model: Model, msg: Msg) -> #(Model, List(fn() -> Msg)) {
     GenerationComplete -> #(Model(..model, step: Complete), [])
 
     GenerationFailed(err) -> #(Model(..model, step: Failed(err)), [])
-
-    AddInfoMessage(msg) -> #(
-      Model(..model, info_messages: list.append(model.info_messages, [msg])),
-      [],
-    )
   }
 }
 
@@ -631,13 +623,6 @@ fn view_complete(model: Model) -> shore.Node(Msg) {
       },
     ),
     ui.text(
-      "Physics: "
-      <> case model.include_physics {
-        True -> "Yes"
-        False -> "No"
-      },
-    ),
-    ui.text(
       "Desktop Bundle: "
       <> case model.bundle_desktop {
         True -> "Yes"
@@ -708,12 +693,12 @@ fn view_error(msg: String) -> shore.Node(Msg) {
 // ============================================================================
 
 fn generate_steps_list(model: Model) -> List(GenerationStep) {
+  // Steps must match the actual execution order in update()
   let base_steps = [
-    StepPending("Installing Lustre dev tools"),
     StepPending("Updating gleam.toml"),
+    StepPending("Installing Lustre dev tools"),
     StepPending("Installing Three.js and Rapier3D"),
     StepPending("Creating .gitignore"),
-    StepPending("Creating index.html"),
   ]
 
   let with_template = case model.template {
@@ -1218,9 +1203,11 @@ fn get_bun_arch_string(arch: Architecture) -> String {
 // ============================================================================
 
 fn generate_2d_template() -> String {
-  "/// 2D Game Example - Orthographic Camera
+  "
+/// 2D Game Example - Orthographic Camera
 import gleam/float
 import gleam/option
+import gleam/time/duration
 import tiramisu
 import tiramisu/background
 import tiramisu/camera
@@ -1230,6 +1217,7 @@ import tiramisu/light
 import tiramisu/material
 import tiramisu/scene
 import tiramisu/transform
+import vec/vec2
 import vec/vec3
 
 pub type Model {
@@ -1238,49 +1226,55 @@ pub type Model {
 
 pub type Msg {
   Tick
+  BackgroundSet
 }
 
 pub fn main() -> Nil {
-  tiramisu.run(
-    dimensions: option.None,
-    background: background.Color(0x1a1a2e),
-    init:,
-    update:,
-    view:,
-  )
+  let assert Ok(Nil) = tiramisu.application(init:, update:, view:)
+  |> tiramisu.start(\"#app\", tiramisu.FullScreen, option.None)
+  Nil
 }
 
-fn init(_ctx: tiramisu.Context(String)) -> #(Model, Effect(Msg), option.Option(_)) {
-  #(Model(time: 0.0), effect.tick(Tick), option.None)
+fn init(ctx: tiramisu.Context) -> #(Model, Effect(Msg), option.Option(_)) {
+  let bg_effect = background.set(ctx.scene, background.Color(0x1a1a2e), BackgroundSet, BackgroundSet)
+  #(Model(time: 0.0), effect.batch([bg_effect, effect.dispatch(Tick)]), option.None)
 }
 
 fn update(
   model: Model,
   msg: Msg,
-  ctx: tiramisu.Context(String),
+  ctx: tiramisu.Context,
 ) -> #(Model, Effect(Msg), option.Option(_)) {
   case msg {
     Tick -> {
-      let new_time = model.time +. ctx.delta_time /. 1000.0
-      #(Model(time: new_time), effect.tick(Tick), option.None)
+      let delta_seconds = duration.to_seconds(ctx.delta_time)
+      let new_time = model.time +. delta_seconds
+      #(Model(time: new_time), effect.dispatch(Tick), option.None)
     }
+    BackgroundSet -> #(model, effect.none(), option.None)
   }
 }
 
-fn view(model: Model, ctx: tiramisu.Context(String)) -> scene.Node(String) {
+fn view(model: Model, ctx: tiramisu.Context) -> scene.Node {
   let cam = camera.camera_2d(
-    width: float.round(ctx.canvas_width),
-    height: float.round(ctx.canvas_height),
+    size: vec2.Vec2(float.round(ctx.canvas_size.x), float.round(ctx.canvas_size.y)),
   )
-  let assert Ok(sprite_geom) = geometry.plane(width: 50.0, height: 50.0)
-  let assert Ok(sprite_mat) = material.basic(color: 0xff0066, transparent: False, opacity: 1.0, map: option.None)
+  let assert Ok(sprite_geom) = geometry.plane(size: vec2.Vec2(50.0, 50.0))
+  let assert Ok(sprite_mat) = material.basic(
+    color: 0xff0066,
+    transparent: False,
+    opacity: 1.0,
+    map: option.None,
+    side: material.FrontSide,
+    alpha_test: 0.0,
+    depth_write: True,
+  )
 
   scene.empty(id: \"Scene\", transform: transform.identity, children: [
     scene.camera(
       id: \"camera\",
       camera: cam,
       transform: transform.at(position: vec3.Vec3(0.0, 0.0, 20.0)),
-      look_at: option.None,
       active: True,
       viewport: option.None,
       postprocessing: option.None,
@@ -1297,7 +1291,7 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> scene.Node(String) {
       id: \"sprite\",
       geometry: sprite_geom,
       material: sprite_mat,
-      transform: 
+      transform:
         transform.at(position: vec3.Vec3(0.0, 0.0, 0.0))
         |> transform.with_euler_rotation(vec3.Vec3(0.0, 0.0, model.time)),
       physics: option.None,
@@ -1308,8 +1302,10 @@ fn view(model: Model, ctx: tiramisu.Context(String)) -> scene.Node(String) {
 }
 
 fn generate_3d_template() -> String {
-  "/// 3D Game Example - Perspective Camera with Lighting
+  "
+/// 3D Game Example - Perspective Camera with Lighting
 import gleam/option
+import gleam/time/duration
 import tiramisu
 import tiramisu/background
 import tiramisu/camera
@@ -1319,6 +1315,7 @@ import tiramisu/light
 import tiramisu/material
 import tiramisu/scene
 import tiramisu/transform
+import vec/vec2
 import vec/vec3
 
 pub type Model {
@@ -1327,51 +1324,54 @@ pub type Model {
 
 pub type Msg {
   Tick
+  BackgroundSet
 }
 
 pub fn main() -> Nil {
-  tiramisu.run(
-    dimensions: option.None,
-    background: background.Color(0x1a1a2e),
-    init:,
-    update:,
-    view:,
-  )
+  let assert Ok(Nil) = tiramisu.application(init:, update:, view:)
+  |> tiramisu.start(\"#app\", tiramisu.FullScreen, option.None)
+  Nil
 }
 
-fn init(_ctx: tiramisu.Context(String)) -> #(Model, Effect(Msg), option.Option(_)) {
-  #(Model(time: 0.0), effect.tick(Tick), option.None)
+fn init(ctx: tiramisu.Context) -> #(Model, Effect(Msg), option.Option(_)) {
+  let bg_effect = background.set(ctx.scene, background.Color(0x1a1a2e), BackgroundSet, BackgroundSet)
+  #(Model(time: 0.0), effect.batch([bg_effect, effect.dispatch(Tick)]), option.None)
 }
 
 fn update(
   model: Model,
   msg: Msg,
-  ctx: tiramisu.Context(String),
+  ctx: tiramisu.Context,
 ) -> #(Model, Effect(Msg), option.Option(_)) {
   case msg {
     Tick -> {
-      let new_time = model.time +. ctx.delta_time
-      #(Model(time: new_time), effect.tick(Tick), option.None)
+      let delta_seconds = duration.to_seconds(ctx.delta_time)
+      let new_time = model.time +. delta_seconds
+      #(Model(time: new_time), effect.dispatch(Tick), option.None)
     }
+    BackgroundSet -> #(model, effect.none(), option.None)
   }
 }
 
-fn view(_model: Model, _ctx: tiramisu.Context(String)) -> scene.Node(String) {
+fn view(_model: Model, _ctx: tiramisu.Context) -> scene.Node {
   let assert Ok(cam) = camera.perspective(field_of_view: 75.0, near: 0.1, far: 1000.0)
-  let assert Ok(sphere_geom) = geometry.sphere(radius: 1.0, width_segments: 32, height_segments: 32)
+  let assert Ok(sphere_geom) = geometry.sphere(radius: 1.0, segments: vec2.Vec2(32, 32))
   let assert Ok(sphere_mat) = material.new() |> material.with_color(0x0066ff) |> material.build
-  let assert Ok(ground_geom) = geometry.plane(width: 20.0, height: 20.0)
+  let assert Ok(ground_geom) = geometry.plane(size: vec2.Vec2(20.0, 20.0))
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
   scene.empty(id: \"Scene\", transform: transform.identity, children: [
     scene.camera(
       id: \"camera\",
       camera: cam,
-      transform: transform.at(position: vec3.Vec3(0.0, 5.0, 10.0)),
-      look_at: option.Some(vec3.Vec3(0.0, 0.0, 0.0)),
+      transform: transform.look_at(
+        from: transform.at(position: vec3.Vec3(0.0, 5.0, 10.0)),
+        to: transform.at(position: vec3.Vec3(0.0, 0.0, 0.0)),
+        up: option.None,
+      ),
       active: True,
       viewport: option.None,
-      postprocessing: option.None
+      postprocessing: option.None,
     ),
     scene.light(
       id: \"ambient\",
@@ -1400,8 +1400,8 @@ fn view(_model: Model, _ctx: tiramisu.Context(String)) -> scene.Node(String) {
       id: \"ground\",
       geometry: ground_geom,
       material: ground_mat,
-      transform: 
-        transform.at(position: vec3.Vec3(0.0, -2.0, 0.0)) 
+      transform:
+        transform.at(position: vec3.Vec3(0.0, -2.0, 0.0))
         |> transform.with_euler_rotation(vec3.Vec3(-1.57, 0.0, 0.0)),
       physics: option.None,
     ),
@@ -1411,7 +1411,8 @@ fn view(_model: Model, _ctx: tiramisu.Context(String)) -> scene.Node(String) {
 }
 
 fn generate_physics_template() -> String {
-  "/// Physics Demo - Falling Cubes
+  "
+/// Physics Demo - Falling Cubes
 /// Demonstrates physics simulation with Rapier3D
 import gleam/option
 import tiramisu
@@ -1426,81 +1427,73 @@ import tiramisu/scene
 import tiramisu/transform
 import vec/vec3
 
-pub type Id {
-  Camera
-  Ambient
-  Directional
-  Ground
-  Cube1
-  Cube2
-  Scene
-}
-
 pub type Model {
   Model
 }
 
 pub type Msg {
   Tick
+  BackgroundSet
 }
 
 pub fn main() -> Nil {
-  tiramisu.run(
-    dimensions: option.None,
-    background: background.Color(0x1a1a2e),
-    init:,
-    update:,
-    view:,
-  )
+  let assert Ok(Nil) = tiramisu.application(init:, update:, view:)
+  |> tiramisu.start(\"#app\", tiramisu.FullScreen, option.None)
+  Nil
 }
 
-fn init(_ctx: tiramisu.Context(Id)) -> #(Model, Effect(Msg), option.Option(_)) {
+fn init(ctx: tiramisu.Context) -> #(Model, Effect(Msg), option.Option(_)) {
   // Initialize physics world with gravity
   let physics_world =
     physics.new_world(
       physics.WorldConfig(gravity: vec3.Vec3(0.0, -9.81, 0.0)),
     )
 
-  #(Model, effect.tick(Tick), option.Some(physics_world))
+  let bg_effect = background.set(ctx.scene, background.Color(0x1a1a2e), BackgroundSet, BackgroundSet)
+  #(Model, effect.batch([bg_effect, effect.dispatch(Tick)]), option.Some(physics_world))
 }
 
 fn update(
   model: Model,
   msg: Msg,
-  ctx: tiramisu.Context(Id),
+  ctx: tiramisu.Context,
 ) -> #(Model, Effect(Msg), option.Option(_)) {
   let assert option.Some(physics_world) = ctx.physics_world
   case msg {
     Tick -> {
       let new_physics_world = physics.step(physics_world, ctx.delta_time)
-      #(model, effect.tick(Tick), option.Some(new_physics_world))
+      #(model, effect.dispatch(Tick), option.Some(new_physics_world))
     }
+    BackgroundSet -> #(model, effect.none(), option.None)
   }
 }
 
-fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
+fn view(_model: Model, ctx: tiramisu.Context) -> scene.Node {
   let assert option.Some(physics_world) = ctx.physics_world
   let assert Ok(cam) = camera.perspective(field_of_view: 75.0, near: 0.1, far: 1000.0)
 
-  let assert Ok(cube_geom) = geometry.box(width: 1.0, height: 1.0, depth: 1.0)
+  let assert Ok(cube_geom) = geometry.box(size: vec3.Vec3(1.0, 1.0, 1.0))
   let assert Ok(cube1_mat) = material.new() |> material.with_color(0xff4444) |> material.build
   let assert Ok(cube2_mat) = material.new() |> material.with_color(0x44ff44) |> material.build
 
-  let assert Ok(ground_geom) = geometry.box(width: 20.0, height: 0.2, depth: 20.0)
+  let assert Ok(ground_geom) = geometry.box(size: vec3.Vec3(20.0, 0.2, 20.0))
   let assert Ok(ground_mat) = material.new() |> material.with_color(0x808080) |> material.build
 
-  scene.empty(id: Scene, transform: transform.identity, children: [
+  scene.empty(id: \"scene\", transform: transform.identity, children: [
     scene.camera(
-      id: Camera,
+      id: \"camera\",
       camera: cam,
-      transform: transform.at(position: vec3.Vec3(0.0, 10.0, 15.0)),
-      look_at: option.Some(vec3.Vec3(0.0, 0.0, 0.0)),
+      transform: transform.look_at(
+        from: transform.at(position: vec3.Vec3(0.0, 10.0, 15.0)),
+        to: transform.at(position: vec3.Vec3(0.0, 0.0, 0.0)),
+        up: option.None,
+      ),
       active: True,
       viewport: option.None,
       postprocessing: option.None,
     ),
     scene.light(
-      id: Ambient,
+      id: \"ambient\",
       light: {
         let assert Ok(light) = light.ambient(color: 0xffffff, intensity: 0.5)
         light
@@ -1508,7 +1501,7 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
       transform: transform.identity,
     ),
     scene.light(
-      id: Directional,
+      id: \"directional\",
       light: {
         let assert Ok(light) = light.directional(color: 0xffffff, intensity: 2.0)
         light
@@ -1517,29 +1510,29 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
     ),
     // Ground (static physics body)
     scene.mesh(
-      id: Ground,
+      id: \"ground\",
       geometry: ground_geom,
       material: ground_mat,
       transform: transform.at(position: vec3.Vec3(0.0, 0.0, 0.0)),
       physics: option.Some(
         physics.new_rigid_body(physics.Fixed)
-        |> physics.with_collider(physics.Box(transform.identity, 20.0, 0.2, 20.0))
+        |> physics.with_collider(physics.Box(offset: transform.identity, size: vec3.Vec3(20.0, 0.2, 20.0)))
         |> physics.with_restitution(0.0)
         |> physics.build(),
       ),
     ),
     // Falling cube 1 (dynamic physics body)
     scene.mesh(
-      id: Cube1,
+      id: \"cube1\",
       geometry: cube_geom,
       material: cube1_mat,
-      transform: case physics.get_transform(physics_world, Cube1) {
+      transform: case physics.get_transform(physics_world, \"cube1\") {
         Ok(t) -> t
         Error(Nil) -> transform.at(position: vec3.Vec3(-2.0, 5.0, 0.0))
       },
       physics: option.Some(
         physics.new_rigid_body(physics.Dynamic)
-        |> physics.with_collider(physics.Box(transform.identity, 1.0, 1.0, 1.0))
+        |> physics.with_collider(physics.Box(offset: transform.identity, size: vec3.Vec3(1.0, 1.0, 1.0)))
         |> physics.with_mass(1.0)
         |> physics.with_restitution(0.5)
         |> physics.with_friction(0.5)
@@ -1548,16 +1541,16 @@ fn view(_model: Model, ctx: tiramisu.Context(Id)) -> scene.Node(Id) {
     ),
     // Falling cube 2 (dynamic physics body)
     scene.mesh(
-      id: Cube2,
+      id: \"cube2\",
       geometry: cube_geom,
       material: cube2_mat,
-      transform: case physics.get_transform(physics_world, Cube2) {
+      transform: case physics.get_transform(physics_world, \"cube2\") {
         Ok(t) -> t
         Error(Nil) -> transform.at(position: vec3.Vec3(2.0, 7.0, 0.0))
       },
       physics: option.Some(
         physics.new_rigid_body(physics.Dynamic)
-        |> physics.with_collider(physics.Box(transform.identity, 1.0, 1.0, 1.0))
+        |> physics.with_collider(physics.Box(offset: transform.identity, size: vec3.Vec3(1.0, 1.0, 1.0)))
         |> physics.with_mass(1.0)
         |> physics.with_restitution(0.6)
         |> physics.with_friction(0.3)

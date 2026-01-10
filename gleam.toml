@@ -1,5 +1,5 @@
 name = "mascarpone"
-version = "2.1.1"
+version = "3.0.0"
 target = "erlang"
 description = "CLI tool for scaffolding Tiramisu game projects"
 licences = ["MIT"]
@@ -16,7 +16,6 @@ tom = ">= 2.0.0 and < 3.0.0"
 operating_system = ">= 1.0.1 and < 2.0.0"
 shellout = ">= 1.7.0 and < 4.0.0"
 argv = ">= 1.0.2 and < 2.0.0"
-tiramisu = ">= 6.0.0 and < 7.0.0"
 vec = ">= 3.0.1 and < 4.0.0"
 
 [dev-dependencies]
